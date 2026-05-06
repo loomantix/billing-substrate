@@ -1,0 +1,55 @@
+name: Publish
+
+# Tag-driven publish to the public npm registry.
+#
+# Push a `v<semver>` tag (e.g. `v0.1.0`) to publish both packages at that
+# version. The tag SHA must already be on `main` and have green CI; this
+# workflow re-runs typecheck + test + build as a defence-in-depth gate but
+# does not weaken the requirement that main was already green.
+#
+# Why tag-driven (not push-to-main): both packages are version-coupled
+# (ohip peerDeps on contract), most main commits don't bump versions, and
+# `npm publish` of an already-published version fails noisily. Tagging
+# makes publishes deliberate and rare; ordinary merges to main do nothing.
+#
+# Provenance: `--provenance` produces an SLSA build attestation linking
+# the published tarball to this workflow run + the tag SHA. Verifiable
+# from `npm view <pkg>` and via `npm audit signatures`. Requires
+# `id-token: write` for OIDC.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          registry-url: 'https://registry.npmjs.org'
+          scope: '@loomantix'
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm -r --if-present run typecheck
+      - run: pnpm -r --if-present run test
+      - run: pnpm -r --if-present run build
+
+      # `--no-git-checks` is required because pnpm publish otherwise refuses
+      # to run from a detached tag checkout. CI history + the tag itself are
+      # the audit trail.
+      - run: pnpm -r publish --access public --provenance --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

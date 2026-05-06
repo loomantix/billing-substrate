@@ -1,0 +1,44 @@
+# Node
+node_modules/
+*.log
+.npm
+.eslintcache
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Test
+coverage/
+.nyc_output/
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local environment
+.env
+.env.local
+.env.*.local
+
+# Secrets — must never be committed
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+
+# pnpm
+.pnpm-store/
+
+# changesets
+.changeset/*.md
+!.changeset/README.md
+!.changeset/config.json

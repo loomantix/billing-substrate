@@ -1,0 +1,25 @@
+{
+  "name": "billing-substrate",
+  "private": true,
+  "version": "0.0.0",
+  "description": "OSS multi-jurisdiction healthcare claims-adapter substrate. Defines the JurisdictionAdapter contract and ships an Ontario MCEDT reference implementation.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/loomantix/billing-substrate.git"
+  },
+  "packageManager": "pnpm@10.29.3",
+  "scripts": {
+    "build": "pnpm -r --if-present run build",
+    "test": "pnpm -r --if-present run test",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "lint": "pnpm -r --if-present run lint"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=10.0.0"
+  }
+}

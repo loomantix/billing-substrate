@@ -1,0 +1,10 @@
+packages:
+  - packages/*
+
+# Catalog: shared dep versions referenced as `catalog:` by package.json.
+# Keep this minimal — only deps actually used by packages/* belong here.
+catalog:
+  typescript: ^5.9.3
+  vitest: ^4.1.4
+  '@types/node': ^22.0.0
+  fast-check: ^4.4.0
