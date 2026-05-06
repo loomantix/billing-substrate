@@ -12,10 +12,15 @@ name: Publish
 # `npm publish` of an already-published version fails noisily. Tagging
 # makes publishes deliberate and rare; ordinary merges to main do nothing.
 #
+# Auth: npm Trusted Publishing (OIDC). The `id-token: write` permission
+# below lets the runner mint a short-lived OIDC token that npm exchanges
+# for a publish credential — no long-lived NPM_TOKEN secret required.
+# Trusted Publisher must be configured per-package on npmjs.com, scoped
+# to this repo + workflow filename.
+#
 # Provenance: `--provenance` produces an SLSA build attestation linking
 # the published tarball to this workflow run + the tag SHA. Verifiable
-# from `npm view <pkg>` and via `npm audit signatures`. Requires
-# `id-token: write` for OIDC.
+# from `npm view <pkg>` and via `npm audit signatures`.
 
 on:
   push:
@@ -51,5 +56,3 @@ jobs:
       # to run from a detached tag checkout. CI history + the tag itself are
       # the audit trail.
       - run: pnpm -r publish --access public --provenance --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
