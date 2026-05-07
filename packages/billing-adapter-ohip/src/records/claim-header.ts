@@ -38,7 +38,7 @@ import {
   rightJustify,
   spaces,
 } from './encoding.js';
-import { EncodeException, type FieldWrongWidthError } from './errors.js';
+import { EncodeException, type InvalidCharacterClassError } from './errors.js';
 
 export interface ClaimHeaderInput {
   /** Health Insurance Number. Empty string for Q310-Q313 / RMB. */
@@ -70,13 +70,17 @@ export interface ClaimHeaderInput {
 const HEH_LENGTH = 79;
 
 function encodePayee(payee: 'P' | 'S'): string {
+  // Defense-in-depth for JS callers and `as` casts: TypeScript's `'P' | 'S'`
+  // narrowing is gone at runtime, and any non-{P,S} character that's still
+  // 1 byte (e.g. `'X'`) would silently produce a 79-char record where the
+  // payee position carries garbage — `record.length` invariant wouldn't fire.
   if (payee !== 'P' && payee !== 'S') {
-    const error: FieldWrongWidthError = {
-      kind: 'field-wrong-width',
+    const error: InvalidCharacterClassError = {
+      kind: 'invalid-character-class',
       path: 'payee',
       value: String(payee),
-      expectedWidth: 1,
-      actualWidth: String(payee).length,
+      badCharCode: String(payee).charCodeAt(0),
+      badCharIndex: 0,
       message: `payee must be 'P' or 'S'`,
     };
     throw new EncodeException(error);

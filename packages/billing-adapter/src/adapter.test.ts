@@ -10,6 +10,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { canSubmit } from './adapter.js';
+import { SubmitterCredentials } from './credentials.js';
 import { AdapterErrorException, describeAdapterError } from './errors.js';
 import type {
   AdapterError,
@@ -21,7 +22,6 @@ import type {
   PollOutcome,
   RenderedClaim,
   SubmitReceipt,
-  SubmitterCredentials,
   SubmitterIdentity,
   ValidationReport,
 } from './index.js';
@@ -96,10 +96,10 @@ describe('JurisdictionAdapter contract', () => {
       displayName: 'Test',
       identifiers: { groupNumber: '0A12' },
     };
-    const credentials: SubmitterCredentials = {
+    const credentials = new SubmitterCredentials({
       jurisdiction: 'ontario-mcedt',
       material: { certificatePem: 'stub' },
-    };
+    });
     const receipt = await adapter.submit(rendered, submitter, credentials);
     expect(receipt.externalId).toBe('edt-resource-stub');
     const outcome = await adapter.poll(receipt, credentials);
@@ -258,14 +258,60 @@ describe('JurisdictionAdapter contract', () => {
       expect(describeAdapterError({ kind: 'auth', message: '' })).not.toBe('');
     });
 
-    it('propagates transport error cause into Error.cause for chained-exception logging', () => {
-      const underlying = new Error('EHOSTUNREACH 10.0.0.1:443');
+    it('propagates a scrubbed transport cause into Error.cause for chained-exception logging', () => {
+      // The contract types `cause` as `ScrubbedCause` ({ name, message,
+      // status? }), not `unknown`. Adapters MUST scrub before throwing —
+      // a raw `fetch` failure or TLS error would carry request headers
+      // (Authorization, mTLS material) and bodies (rendered claim PHI)
+      // through default cause-chain serialization in pino/Sentry/OTel.
+      const scrubbed = {
+        name: 'TransportError',
+        message: 'EHOSTUNREACH',
+        status: 503,
+      };
       const e = new AdapterErrorException({
         kind: 'transport',
         message: 'connection refused',
-        cause: underlying,
+        cause: scrubbed,
       });
-      expect(e.cause).toBe(underlying);
+      expect(e.cause).toEqual(scrubbed);
+    });
+
+    it('runtime-narrows cause to {name, message, status?} even when caller bypasses the type via as-cast', () => {
+      // Defense-in-depth: a JS caller or `as unknown as ScrubbedCause`
+      // cast can satisfy the compile-time type structurally with an
+      // Error / Response / fetch-failure object that carries
+      // headers, bodies, stacks, or nested .cause / .config /
+      // .request properties. The constructor must not propagate any
+      // of those.
+      const dangerous = {
+        name: 'AxiosError',
+        message: 'Request failed with status code 401',
+        status: 401,
+        // Hostile fields that must NOT reach Error.cause:
+        config: { headers: { Authorization: 'Bearer SECRET-TOKEN' } },
+        request: { _header: 'POST / HTTP/1.1\nAuthorization: Bearer SECRET' },
+        stack: 'Error: ...\n  at /path/to/secret-file.ts:42',
+      } as unknown as import('./errors.js').ScrubbedCause;
+
+      const e = new AdapterErrorException({
+        kind: 'transport',
+        message: 'auth failed',
+        cause: dangerous,
+      });
+
+      expect(e.cause).toEqual({
+        name: 'AxiosError',
+        message: 'Request failed with status code 401',
+        status: 401,
+      });
+      // Pointer inequality proves the constructor copied rather than
+      // forwarded the live object.
+      expect(e.cause).not.toBe(dangerous);
+      const inspected = JSON.stringify(e.cause);
+      expect(inspected).not.toContain('SECRET-TOKEN');
+      expect(inspected).not.toContain('Authorization');
+      expect(inspected).not.toContain('secret-file');
     });
 
     it('omits Error.cause when the transport variant supplies no cause', () => {
@@ -283,6 +329,63 @@ describe('JurisdictionAdapter contract', () => {
         message: 'jurisdiction said no',
       });
       expect(e.cause).toBeUndefined();
+    });
+
+    describe('SubmitterCredentials redaction', () => {
+      it('redacts material under JSON.stringify', () => {
+        const creds = new SubmitterCredentials({
+          jurisdiction: 'ontario-mcedt',
+          material: {
+            certificatePem: '-----BEGIN CERTIFICATE-----\nSECRET\n-----END CERTIFICATE-----',
+            privateKeyPem: '-----BEGIN PRIVATE KEY-----\nSECRET\n-----END PRIVATE KEY-----',
+          },
+        });
+        const json = JSON.stringify(creds);
+        expect(json).not.toContain('SECRET');
+        expect(json).not.toContain('BEGIN CERTIFICATE');
+        expect(json).toContain('[redacted]');
+      });
+
+      it('redacts material under util.inspect (console.log path)', async () => {
+        const { inspect } = await import('node:util');
+        const creds = new SubmitterCredentials({
+          jurisdiction: 'ontario-mcedt',
+          material: {
+            certificatePem: 'SECRET-CERT',
+            privateKeyPem: 'SECRET-KEY',
+          },
+        });
+        const inspected = inspect(creds);
+        expect(inspected).not.toContain('SECRET-CERT');
+        expect(inspected).not.toContain('SECRET-KEY');
+        expect(inspected).toContain('[redacted]');
+      });
+
+      it('redacts material when wrapped in a plain object that is logged', async () => {
+        // Common shape: a structured logger receives `{ creds, op: 'submit' }`.
+        // Both the JSON path and the inspect path must redact.
+        const { inspect } = await import('node:util');
+        const creds = new SubmitterCredentials({
+          jurisdiction: 'ontario-mcedt',
+          material: { certificatePem: 'SECRET-WRAPPED' },
+        });
+        const wrapped = { op: 'submit', creds };
+        expect(JSON.stringify(wrapped)).not.toContain('SECRET-WRAPPED');
+        expect(inspect(wrapped)).not.toContain('SECRET-WRAPPED');
+      });
+
+      it('exposes material only through the get accessor', () => {
+        const creds = new SubmitterCredentials({
+          jurisdiction: 'ontario-mcedt',
+          material: { certificatePem: 'value' },
+        });
+        expect(creds.get('certificatePem')).toBe('value');
+        expect(creds.get('missing')).toBeUndefined();
+        expect(creds.has('certificatePem')).toBe(true);
+        // No `material` field on the surface — adapters cannot accidentally
+        // template-string the bag's contents into an error message.
+        expect((creds as unknown as { material?: unknown }).material).toBeUndefined();
+      });
     });
 
     it('throws and catches as Error (consumer ergonomics)', () => {

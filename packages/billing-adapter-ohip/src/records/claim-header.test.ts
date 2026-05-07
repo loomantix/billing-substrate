@@ -83,16 +83,19 @@ describe('encodeClaimHeader', () => {
     expect(record.slice(57, 58)).toBe('Y');
   });
 
-  it('rejects invalid payee value', () => {
+  it('rejects an invalid payee value (defense-in-depth against JS / as-cast)', () => {
+    expect(() =>
+      encodeClaimHeader({ ...patientLinked, payee: 'X' as 'P' }),
+    ).toThrow(EncodeException);
     try {
       encodeClaimHeader({ ...patientLinked, payee: 'X' as 'P' });
-      throw new Error('should have thrown');
     } catch (e) {
       const err = (e as EncodeException).error;
-      expect(err.kind).toBe('field-wrong-width');
+      expect(err.kind).toBe('invalid-character-class');
       expect(err.path).toBe('payee');
     }
   });
+
 
   it('rejects payProgram with wrong width', () => {
     expect(() =>

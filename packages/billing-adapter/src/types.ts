@@ -29,6 +29,64 @@ export type Jurisdiction =
   // Future: 'bc-msp', 'us-x12-837', 'de-kbv', 'fr-fse', 'za-medical-schemes', etc.
   | (string & { readonly __jurisdictionBrand?: never });
 
+declare const isoDateBrand: unique symbol;
+
+/**
+ * An ISO 8601 calendar date in `YYYY-MM-DD` form. The brand certifies
+ * three things at compile time:
+ *
+ * 1. Shape: matches `^\d{4}-\d{2}-\d{2}$`.
+ * 2. Component plausibility: month in `[1, 12]`, day in `[1, 31]`.
+ * 3. Calendar validity: month/day combination exists (no Feb 30, no
+ *    Apr 31). Reconstructed via `Date.UTC` round-trip.
+ *
+ * Construct with {@link parseIsoDate}. Use a non-null assertion in
+ * test fixtures where the literal is known-valid; in production, route
+ * untrusted input through `parseIsoDate` and surface the `null` case
+ * as a validation finding.
+ */
+export type IsoDate = string & { readonly [isoDateBrand]: true };
+
+const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * Parse a `YYYY-MM-DD` string into a branded {@link IsoDate}. Returns
+ * `null` for any input that fails shape, component-range, or
+ * calendar-validity checks. A successful parse is the only way to
+ * construct an `IsoDate` value.
+ */
+export function parseIsoDate(value: string): IsoDate | null {
+  const match = ISO_DATE_PATTERN.exec(value);
+  if (!match) return null;
+  const year = Number.parseInt(match[1] as string, 10);
+  const month = Number.parseInt(match[2] as string, 10);
+  const day = Number.parseInt(match[3] as string, 10);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const utcMs = Date.UTC(year, month - 1, day);
+  const reconstructed = new Date(utcMs);
+  if (
+    reconstructed.getUTCFullYear() !== year ||
+    reconstructed.getUTCMonth() !== month - 1 ||
+    reconstructed.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return value as IsoDate;
+}
+
+/**
+ * Convert an {@link IsoDate} to its UTC-midnight epoch milliseconds.
+ * Trusted by the brand: no re-validation needed at the call site.
+ */
+export function isoDateToUtcMs(value: IsoDate): number {
+  const match = ISO_DATE_PATTERN.exec(value) as RegExpExecArray;
+  return Date.UTC(
+    Number.parseInt(match[1] as string, 10),
+    Number.parseInt(match[2] as string, 10) - 1,
+    Number.parseInt(match[3] as string, 10),
+  );
+}
+
 /**
  * Identifies a submitting entity registered with a deployment of the substrate.
  * For Ontario MCEDT under the MSA security model, `identifiers` carries the
@@ -61,12 +119,12 @@ export interface ClaimBatch {
 }
 
 /**
- * Service period the batch covers, expressed as ISO 8601 date strings
- * (`YYYY-MM-DD`). Inclusive on both ends.
+ * Service period the batch covers, expressed as ISO 8601 calendar
+ * dates. Inclusive on both ends.
  */
 export interface ServicePeriod {
-  readonly start: string;
-  readonly end: string;
+  readonly start: IsoDate;
+  readonly end: IsoDate;
 }
 
 /**
@@ -82,8 +140,7 @@ export interface ServicePeriod {
  * with the last two digits as cents.
  */
 export interface ClaimItem {
-  /** ISO 8601 date string (`YYYY-MM-DD`). */
-  readonly serviceDate: string;
+  readonly serviceDate: IsoDate;
   /** Jurisdiction-specific fee code (e.g. `Q310A`, `A007A`, US CPT codes). */
   readonly feeCode: string;
   /** Number of service units (e.g. 15-minute increments for Ontario hourly). */
@@ -107,8 +164,7 @@ export interface PatientReference {
   readonly healthNumber: string;
   /** Version code where the jurisdiction tracks card revisions. */
   readonly versionCode?: string;
-  /** ISO 8601 date string (`YYYY-MM-DD`). */
-  readonly dateOfBirth: string;
+  readonly dateOfBirth: IsoDate;
 }
 
 /**
@@ -128,6 +184,23 @@ export interface RenderedClaim {
  * Severity of a single validation finding.
  */
 export type Severity = 'error' | 'warning';
+
+/**
+ * True when a finding at this severity blocks `render` / `submit`.
+ * Implemented as an exhaustive switch so any future {@link Severity}
+ * addition is a build error rather than a silent posture regression
+ * (a positive `=== 'error'` predicate would fail open on a new
+ * blocking-severity addition; a negative `!== 'warning'` would fail
+ * closed but would also block any new informational severity).
+ */
+export function isBlockingFinding(severity: Severity): boolean {
+  switch (severity) {
+    case 'error':
+      return true;
+    case 'warning':
+      return false;
+  }
+}
 
 /**
  * One validation finding from an adapter's pre-flight check. Carries enough

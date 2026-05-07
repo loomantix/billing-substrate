@@ -19,6 +19,29 @@
 
 import type { ValidationReport } from './types.js';
 
+/**
+ * Sanitized cause information attached to a `transport`-variant
+ * `AdapterError`. The contract requires adapters to scrub raw exception
+ * objects before surfacing them: a raw `fetch` failure or TLS error
+ * carries request headers (Authorization, mTLS material), request
+ * bodies (PHI from the rendered claim), or response payloads — all of
+ * which `Error.cause` would propagate to consumer loggers (Sentry,
+ * OpenTelemetry, pino) by default.
+ *
+ * Adapters MUST construct this shape from the underlying failure
+ * deliberately, copying only the fields listed below. `name` and
+ * `message` are required; `status` is optional for HTTP-style failures.
+ *
+ * If you need richer context for server-side debugging, log it
+ * separately (with appropriate scrubbing) — do not stuff it into the
+ * surfaced cause.
+ */
+export interface ScrubbedCause {
+  readonly name: string;
+  readonly message: string;
+  readonly status?: number;
+}
+
 export type AdapterError =
   | {
       readonly kind: 'validation';
@@ -27,7 +50,7 @@ export type AdapterError =
   | {
       readonly kind: 'transport';
       readonly message: string;
-      readonly cause?: unknown;
+      readonly cause?: ScrubbedCause;
     }
   | {
       readonly kind: 'auth';
@@ -97,6 +120,17 @@ export function describeAdapterError(error: AdapterError): string {
   }
 }
 
+function narrowScrubbedCause(cause: ScrubbedCause): ScrubbedCause {
+  const narrowed: { name: string; message: string; status?: number } = {
+    name: typeof cause.name === 'string' ? cause.name : 'Error',
+    message: typeof cause.message === 'string' ? cause.message : '',
+  };
+  if (typeof cause.status === 'number') {
+    narrowed.status = cause.status;
+  }
+  return narrowed;
+}
+
 /**
  * Error thrown by adapter methods to surface an `AdapterError` payload.
  *
@@ -127,13 +161,16 @@ export class AdapterErrorException extends Error {
   readonly error: AdapterError;
 
   constructor(error: AdapterError) {
-    // Propagate the underlying cause (only `transport` carries one in the
-    // current union) into `Error.cause` so `util.inspect`, Sentry, and
-    // OTel exporters render the chain. Without this the wrapper would
-    // hide the very context it was added to surface.
+    // Propagate a narrowed copy of the underlying cause into
+    // `Error.cause` so structured loggers (util.inspect, Sentry, OTel)
+    // render the chain. The compile-time `ScrubbedCause` type narrows
+    // adapters' input; this runtime copy defends against `as` casts
+    // and JS-bypass callers that satisfy the type structurally with a
+    // raw fetch error / Response / TLS failure carrying credentials
+    // or PHI in `.config`, `.request.headers`, `.stack`, etc.
     const options =
       error.kind === 'transport' && error.cause !== undefined
-        ? { cause: error.cause }
+        ? { cause: narrowScrubbedCause(error.cause) }
         : undefined;
     super(`${error.kind}: ${describeAdapterError(error)}`, options);
     this.name = 'AdapterErrorException';

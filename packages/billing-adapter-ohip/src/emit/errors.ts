@@ -52,19 +52,69 @@ export interface PatientMissingRequiredFieldError extends EmitErrorBase {
   readonly itemIndex: number;
 }
 
+/**
+ * The caller-supplied `ClaimBatch.items` array contains a falsy slot at
+ * `itemIndex`. TypeScript's `readonly ClaimItem[]` admits sparse arrays
+ * and `null`/`undefined` values at runtime; silently skipping them
+ * would drop a claim the caller submitted without surfacing it as a
+ * finding — and would also break the `LineResult.itemIndex` mapping
+ * downstream when poll results come back from the jurisdiction.
+ */
+export interface MissingItemError extends EmitErrorBase {
+  readonly kind: 'missing-item';
+  readonly itemIndex: number;
+}
+
+/**
+ * Canonical human message for the `missing-item` finding, used by both
+ * the validator (as a `ValidationViolation.message`) and the emit
+ * layer (as the `MissingItemError.message`). Single source of truth so
+ * the two can't drift.
+ */
+export function missingItemMessage(itemIndex: number): string {
+  return `items[${itemIndex}] is missing (null, undefined, or sparse-array hole)`;
+}
+
 export type EmitError =
   | EmptyBatchError
   | FileTooLargeError
   | InconsistentGroupFieldError
-  | PatientMissingRequiredFieldError;
+  | PatientMissingRequiredFieldError
+  | MissingItemError;
 
 export type EmitErrorKind = EmitError['kind'];
+
+/**
+ * Build a PHI-free `Error.message` summary from the structured payload.
+ * The `message` field on each `EmitError` variant CAN carry PHI (e.g.
+ * the `inconsistent-group-field` variant interpolates `groupKey =
+ * HIN|DoB|date`), so the exception's `.message` MUST NOT mirror it
+ * directly — anything that catches and logs `e.message` (Sentry's
+ * default fingerprint, `util.inspect`, `e.toString()`) leaks.
+ *
+ * The structured payload remains accessible via `.error` for
+ * in-package handlers (e.g. `translateRenderException`).
+ */
+function buildEmitExceptionMessage(error: EmitError): string {
+  switch (error.kind) {
+    case 'empty-batch':
+      return 'empty-batch: zero claim items';
+    case 'file-too-large':
+      return `file-too-large: ${error.fileSize} > ${error.maxSize}`;
+    case 'inconsistent-group-field':
+      return `inconsistent-group-field: ${error.field}`;
+    case 'patient-missing-required-field':
+      return `patient-missing-required-field: items[${error.itemIndex}].${error.field}`;
+    case 'missing-item':
+      return `missing-item: items[${error.itemIndex}]`;
+  }
+}
 
 export class EmitException extends Error {
   readonly error: EmitError;
 
   constructor(error: EmitError) {
-    super(`${error.kind}: ${error.message}`);
+    super(buildEmitExceptionMessage(error));
     this.name = 'EmitException';
     this.error = error;
   }

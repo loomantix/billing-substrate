@@ -61,7 +61,7 @@ import {
 } from '../records/index.js';
 import type { OntarioMcedtIdentifiers } from '../types.js';
 
-import { EmitException } from './errors.js';
+import { EmitException, missingItemMessage } from './errors.js';
 
 const CR = 0x0d;
 const RECORD_BODY_LENGTH = 79;
@@ -158,6 +158,18 @@ function compareItems(a: ClaimItem, b: ClaimItem): number {
 function patientGroupKey(item: ClaimItem): string | null {
   if (!item.patient) return null;
   return `${item.patient.healthNumber}|${item.patient.dateOfBirth}|${item.serviceDate}`;
+}
+
+function assertItemsPresent(items: readonly ClaimItem[]): void {
+  for (let i = 0; i < items.length; i++) {
+    if (!items[i]) {
+      throw new EmitException({
+        kind: 'missing-item',
+        itemIndex: i,
+        message: missingItemMessage(i),
+      });
+    }
+  }
 }
 
 function assertPatientFieldsPresent(items: readonly ClaimItem[]): void {
@@ -269,6 +281,7 @@ export async function emitClaimFile(
     });
   }
 
+  assertItemsPresent(batch.items);
   assertPatientFieldsPresent(batch.items);
 
   const sortedItems = [...batch.items].sort(compareItems);

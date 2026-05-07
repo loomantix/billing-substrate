@@ -262,10 +262,37 @@ describe('translateRenderException — defense-in-depth contract translation', (
     const v = result.report.violations[0]!;
     expect(v.severity).toBe('error');
     expect(v.code).toBe('empty-batch');
-    expect(v.message).toBe(inner.error.message);
+    expect(v.message).toContain('zero claim items');
   });
 
-  it('sanitizes inconsistent-group-field — does NOT echo groupKey (PHI: HIN|DoB|date)', () => {
+  it('sanitizes inconsistent-group-field — does NOT echo groupKey (HIN|DoB|date) or values (versionCode is PHI-adjacent)', () => {
+    const inner = new EmitException({
+      kind: 'inconsistent-group-field',
+      field: 'versionCode',
+      groupKey: '1234567890|1980-04-19|2026-04-19',
+      firstValue: 'AB',
+      conflictingValue: 'CD',
+      message:
+        'items in claim envelope 1234567890|1980-04-19|2026-04-19 disagree on versionCode',
+    });
+    const result = translateRenderException(inner);
+    expect(result.kind).toBe('validation');
+    if (result.kind !== 'validation') return;
+    const v = result.report.violations[0]!;
+    expect(v.code).toBe('inconsistent-group-field');
+    expect(v.message).not.toContain('1234567890');
+    expect(v.message).not.toContain('1980-04-19');
+    expect(v.message).not.toContain('AB');
+    expect(v.message).not.toContain('CD');
+    expect(v.message).toContain('versionCode');
+  });
+
+  it('EmitException.message itself does NOT carry PHI — only the structured kind summary', () => {
+    // Defends against catch-and-log paths inside the package: if any
+    // future code reaches into `e.message` instead of `e.error`, the
+    // PHI-bearing groupKey must already be scrubbed at the
+    // Error-message level (super constructor), not just at
+    // translateRenderException's surface.
     const inner = new EmitException({
       kind: 'inconsistent-group-field',
       field: 'serviceLocation',
@@ -275,16 +302,11 @@ describe('translateRenderException — defense-in-depth contract translation', (
       message:
         'items in claim envelope 1234567890|1980-04-19|2026-04-19 disagree on serviceLocation',
     });
-    const result = translateRenderException(inner);
-    expect(result.kind).toBe('validation');
-    if (result.kind !== 'validation') return;
-    const v = result.report.violations[0]!;
-    expect(v.code).toBe('inconsistent-group-field');
-    expect(v.message).not.toContain('1234567890');
-    expect(v.message).not.toContain('1980-04-19');
-    expect(v.message).toContain('serviceLocation');
-    expect(v.message).toContain('HOSP');
-    expect(v.message).toContain('OFFC');
+    expect(inner.message).not.toContain('1234567890');
+    expect(inner.message).not.toContain('1980-04-19');
+    expect(inner.message).not.toContain('HOSP');
+    expect(inner.message).not.toContain('OFFC');
+    expect(inner.message).toContain('inconsistent-group-field');
   });
 
   it('translates file-too-large with size context but no PHI', () => {
@@ -317,7 +339,7 @@ describe('translateRenderException — defense-in-depth contract translation', (
     expect(v.path).toBe('items[3].patient.healthNumber');
   });
 
-  it('translates EncodeException into kind="validation" carrying the field path', () => {
+  it('translates EncodeException into kind="validation" carrying the field path with a scrubbed message', () => {
     const inner = new EncodeException({
       kind: 'field-wrong-width',
       path: 'mohOfficeCode',
@@ -332,7 +354,68 @@ describe('translateRenderException — defense-in-depth contract translation', (
     const v = result.report.violations[0]!;
     expect(v.code).toBe('field-wrong-width');
     expect(v.path).toBe('mohOfficeCode');
-    expect(v.message).toBe(inner.error.message);
+    expect(v.message).toContain('width 1');
+    expect(v.message).not.toContain('07');
+  });
+
+  it('sanitizes EncodeException invalid-date — does NOT echo the raw value (PHI: dateOfBirth)', () => {
+    // EncodeError messages embed the raw field value for invalid-date
+    // ("expected YYYY-MM-DD, got <value>") and lowercase character class
+    // ("lowercase character '<char>' at index N"). For PHI-bearing fields
+    // (dateOfBirth, healthNumber) that value is patient PHI. The translated
+    // ValidationViolation.message crosses the public adapter boundary, so
+    // it MUST NOT contain the raw value. If a future change ever forwards
+    // cause.error.message verbatim again, this test fails closed.
+    const inner = new EncodeException({
+      kind: 'invalid-date',
+      path: 'items[0].patient.dateOfBirth',
+      value: '1980-04-19',
+      message: 'expected YYYY-MM-DD (or empty for unpopulated), got "1980-04-19"',
+    });
+    const result = translateRenderException(inner);
+    expect(result.kind).toBe('validation');
+    if (result.kind !== 'validation') return;
+    const v = result.report.violations[0]!;
+    expect(v.code).toBe('invalid-date');
+    expect(v.path).toBe('items[0].patient.dateOfBirth');
+    expect(v.message).not.toContain('1980-04-19');
+    expect(v.message).not.toContain('1980');
+  });
+
+  it('sanitizes EncodeException field-too-long — does NOT echo the raw value (PHI: HIN, name)', () => {
+    const inner = new EncodeException({
+      kind: 'field-too-long',
+      path: 'items[0].patient.healthNumber',
+      value: '12345678901',
+      width: 10,
+      message: 'value of length 11 exceeds field width 10',
+    });
+    const result = translateRenderException(inner);
+    expect(result.kind).toBe('validation');
+    if (result.kind !== 'validation') return;
+    const v = result.report.violations[0]!;
+    expect(v.code).toBe('field-too-long');
+    expect(v.path).toBe('items[0].patient.healthNumber');
+    expect(v.message).not.toContain('12345678901');
+    expect(v.message).toContain('width 10');
+  });
+
+  it('sanitizes EncodeException invalid-character-class — does NOT echo the raw value (PHI: HIN, name)', () => {
+    const inner = new EncodeException({
+      kind: 'invalid-character-class',
+      path: 'items[0].patient.healthNumber',
+      value: '1234567890',
+      badCharCode: 49,
+      badCharIndex: 0,
+      message: "lowercase character '1' at index 0; MCEDT requires uppercase",
+    });
+    const result = translateRenderException(inner);
+    expect(result.kind).toBe('validation');
+    if (result.kind !== 'validation') return;
+    const v = result.report.violations[0]!;
+    expect(v.code).toBe('invalid-character-class');
+    expect(v.path).toBe('items[0].patient.healthNumber');
+    expect(v.message).not.toContain('1234567890');
   });
 
   it('translates an unknown Error into kind="rejected" with a generic message (no PHI leak)', () => {

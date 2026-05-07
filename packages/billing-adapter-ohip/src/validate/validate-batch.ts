@@ -21,21 +21,22 @@
  *   to the user (stale dates, unknown fee codes, suspicious periods).
  */
 
-import type {
-  ClaimBatch,
-  ClaimItem,
-  PatientReference,
-  ServicePeriod,
-  ValidationReport,
-  ValidationViolation,
+import {
+  parseIsoDate,
+  type ClaimBatch,
+  type ClaimItem,
+  type PatientReference,
+  type ServicePeriod,
+  type ValidationReport,
+  type ValidationViolation,
 } from '@loomantix/billing-adapter';
 
+import { missingItemMessage } from '../emit/errors.js';
 import type { OntarioMcedtConfig } from '../emit/index.js';
 
 import { KNOWN_FEE_CODES } from './known-fee-codes.js';
 
 const ANNNS_PATTERN = /^[A-Z][0-9]{3}[A-Z]$/;
-const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 const HIN_PATTERN = /^\d{10}$/;
 const STALE_THRESHOLD_DAYS = 183;
 const TOO_OLD_PERIOD_DAYS = 730;
@@ -95,15 +96,15 @@ function checkAsciiUppercase(
         message: `${path} contains non-printable or non-ASCII char at index ${i}`,
         path,
       });
-      return;
+      continue;
     }
     if (ch >= 0x61 && ch <= 0x7a) {
       pushError(violations, {
         code: `lowercase-${fieldCode}`,
-        message: `${path} contains lowercase '${value[i]}' at index ${i}; MCEDT requires uppercase`,
+        message: `${path} contains lowercase character at index ${i}; MCEDT requires uppercase`,
         path,
       });
-      return;
+      continue;
     }
   }
 }
@@ -216,26 +217,15 @@ function validateConfig(
   );
 }
 
-function parseIsoDate(value: string): Date | null {
-  const match = ISO_DATE_PATTERN.exec(value);
-  if (!match) return null;
-  const yearStr = match[1] as string;
-  const monthStr = match[2] as string;
-  const dayStr = match[3] as string;
-  const year = Number.parseInt(yearStr, 10);
-  const month = Number.parseInt(monthStr, 10);
-  const day = Number.parseInt(dayStr, 10);
-  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-  const utcMs = Date.UTC(year, month - 1, day);
-  const reconstructed = new Date(utcMs);
-  if (
-    reconstructed.getUTCFullYear() !== year ||
-    reconstructed.getUTCMonth() !== month - 1 ||
-    reconstructed.getUTCDate() !== day
-  ) {
-    return null;
-  }
-  return reconstructed;
+function isoDateToDate(value: string): Date | null {
+  // The contract type `IsoDate` certifies shape and calendar validity at
+  // compile time; this function still re-parses at runtime as
+  // defense-in-depth for callers that bypass the type system (JS, `as
+  // IsoDate` casts). A successful round-trip yields a Date for the
+  // window/staleness arithmetic; failure produces a finding.
+  const branded = parseIsoDate(value);
+  if (!branded) return null;
+  return new Date(branded);
 }
 
 function daysBetween(earlier: Date, later: Date): number {
@@ -247,8 +237,8 @@ function validatePeriod(
   now: Date,
   violations: ValidationViolation[],
 ): { start: Date | null; end: Date | null } {
-  const start = parseIsoDate(period.start);
-  const end = parseIsoDate(period.end);
+  const start = isoDateToDate(period.start);
+  const end = isoDateToDate(period.end);
 
   if (!start) {
     pushError(violations, {
@@ -318,7 +308,7 @@ function validatePatient(
       message: `${itemPath}.patient.dateOfBirth is empty`,
       path: `${itemPath}.patient.dateOfBirth`,
     });
-  } else if (!parseIsoDate(patient.dateOfBirth)) {
+  } else if (!isoDateToDate(patient.dateOfBirth)) {
     pushError(violations, {
       code: 'invalid-patient-date-of-birth',
       message: `${itemPath}.patient.dateOfBirth must be YYYY-MM-DD`,
@@ -398,7 +388,7 @@ function validateItem(
     });
   }
 
-  const serviceDate = parseIsoDate(item.serviceDate);
+  const serviceDate = isoDateToDate(item.serviceDate);
   if (!serviceDate) {
     pushError(violations, {
       code: 'invalid-service-date',
@@ -502,9 +492,15 @@ export function validateBatch(
 
   for (let i = 0; i < batch.items.length; i++) {
     const item = batch.items[i];
-    if (item) {
-      validateItem(item, i, period, now, violations);
+    if (!item) {
+      pushError(violations, {
+        code: 'missing-item',
+        message: missingItemMessage(i),
+        path: `items[${i}]`,
+      });
+      continue;
     }
+    validateItem(item, i, period, now, violations);
   }
 
   return { violations };
