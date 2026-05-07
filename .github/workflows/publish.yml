@@ -63,8 +63,17 @@ jobs:
       - run: pnpm -r --if-present run test
       - run: pnpm -r --if-present run build
 
-      # Node 22's bundled npm is 10.x; OIDC token-exchange landed in 11.5.1.
-      - run: npm install -g npm@latest
+      # Node 22's bundled npm is 10.x; OIDC token-exchange landed in
+      # npm 11.5.1+. `npm install -g npm@latest` is unreliable here —
+      # it hits the well-known self-update race ("Cannot find module
+      # 'promise-retry'") because the running npm deletes its own
+      # dependencies mid-install. Installing to an isolated prefix
+      # avoids the self-reference entirely.
+      - name: Install latest npm CLI (isolated prefix)
+        run: |
+          mkdir -p /tmp/npm-latest
+          npm install --prefix /tmp/npm-latest npm@latest
+          echo "/tmp/npm-latest/node_modules/.bin" >> "$GITHUB_PATH"
       - run: npm --version
 
       - name: Publish @loomantix/billing-adapter
