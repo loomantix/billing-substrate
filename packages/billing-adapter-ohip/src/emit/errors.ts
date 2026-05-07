@@ -9,6 +9,8 @@
  * value).
  */
 
+import type { BatchItemIndex } from '@loomantix/billing-adapter';
+
 interface EmitErrorBase {
   readonly message: string;
 }
@@ -49,23 +51,84 @@ export interface InconsistentGroupFieldError extends EmitErrorBase {
 export interface PatientMissingRequiredFieldError extends EmitErrorBase {
   readonly kind: 'patient-missing-required-field';
   readonly field: 'healthNumber' | 'dateOfBirth';
-  readonly itemIndex: number;
+  readonly itemIndex: BatchItemIndex;
+}
+
+/**
+ * The caller-supplied `ClaimBatch.items` array contains a falsy slot at
+ * `itemIndex`. TypeScript's `readonly ClaimItem[]` admits sparse arrays
+ * and `null`/`undefined` values at runtime; silently skipping them
+ * would drop a claim the caller submitted without surfacing it as a
+ * finding — and would also break the `LineResult.itemIndex` mapping
+ * downstream when poll results come back from the jurisdiction.
+ */
+export interface MissingItemError extends EmitErrorBase {
+  readonly kind: 'missing-item';
+  readonly itemIndex: BatchItemIndex;
+}
+
+/** Shared between the validator finding and the emit-layer exception. */
+export function missingItemMessage(itemIndex: BatchItemIndex | number): string {
+  return `items[${itemIndex}] is missing (null, undefined, or sparse-array hole)`;
 }
 
 export type EmitError =
   | EmptyBatchError
   | FileTooLargeError
   | InconsistentGroupFieldError
-  | PatientMissingRequiredFieldError;
+  | PatientMissingRequiredFieldError
+  | MissingItemError;
 
 export type EmitErrorKind = EmitError['kind'];
 
+/**
+ * PHI-free `Error.message`. The `message` field on each variant can
+ * carry PHI (e.g. `inconsistent-group-field`'s `groupKey =
+ * HIN|DoB|date`); the structured payload stays accessible via `.error`.
+ */
+function buildEmitExceptionMessage(error: EmitError): string {
+  switch (error.kind) {
+    case 'empty-batch':
+      return 'empty-batch: zero claim items';
+    case 'file-too-large':
+      return `file-too-large: ${error.fileSize} > ${error.maxSize}`;
+    case 'inconsistent-group-field':
+      return `inconsistent-group-field: ${error.field}`;
+    case 'patient-missing-required-field':
+      return `patient-missing-required-field: items[${error.itemIndex}].${error.field}`;
+    case 'missing-item':
+      return `missing-item: items[${error.itemIndex}]`;
+    default: {
+      const _exhaustive: never = error;
+      throw new Error(`unhandled EmitError variant: ${String((_exhaustive as { kind?: unknown }).kind)}`);
+    }
+  }
+}
+
 export class EmitException extends Error {
-  readonly error: EmitError;
+  readonly error!: EmitError;
 
   constructor(error: EmitError) {
-    super(`${error.kind}: ${error.message}`);
+    super(buildEmitExceptionMessage(error));
     this.name = 'EmitException';
-    this.error = error;
+    // Non-enumerable: defends against structured loggers that copy
+    // own enumerable properties without calling toJSON / inspect —
+    // `error.groupKey`, `error.firstValue`, `error.conflictingValue`
+    // (PHI for the inconsistent-group-field variant) would
+    // otherwise leak via the default own-property walk.
+    Object.defineProperty(this, 'error', {
+      value: error,
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    });
+  }
+
+  toJSON(): { readonly name: string; readonly message: string; readonly kind: EmitError['kind'] } {
+    return { name: this.name, message: this.message, kind: this.error.kind };
+  }
+
+  [Symbol.for('nodejs.util.inspect.custom')](): string {
+    return `${this.name}: ${this.message}`;
   }
 }

@@ -491,4 +491,48 @@ describe('validateBatch — aggregation (contract obligation 1)', () => {
       expect(v.path).toContain('items[0]');
     }
   });
+
+  it('returns errors AND warnings in the same report — neither severity is dropped', () => {
+    const mixed = batchOf([
+      q310Item({ feeCode: 'Q310' }),               // error: fee-code format
+      q310Item({ feeCode: 'Z999X' }),              // warning: unknown fee code
+      q310Item({ serviceDate: '2025-09-01' }),     // warning: stale (>183 days under NOW = 2026-05-04)
+    ]);
+    const report = validateBatch(
+      { ...mixed, servicePeriod: { start: '2025-09-01', end: '2026-05-04' } },
+      validConfig,
+      { now: NOW },
+    );
+    const errors = report.violations.filter((v) => v.severity === 'error');
+    const warnings = report.violations.filter((v) => v.severity === 'warning');
+    expect(errors.length).toBeGreaterThan(0);
+    expect(warnings.length).toBeGreaterThan(0);
+    expect(errors.map((v) => v.code)).toContain('invalid-fee-code-format');
+    expect(warnings.map((v) => v.code)).toContain('unknown-fee-code');
+    expect(warnings.map((v) => v.code)).toContain('stale-service-date');
+  });
+
+  it('records a missing-item violation rather than silently skipping a sparse-array hole', () => {
+    const sparse: ClaimItem[] = [
+      q310Item(),
+      undefined as unknown as ClaimItem,
+      q310Item({ serviceDate: '2026-04-22' }),
+    ];
+    const report = validateBatch(batchOf(sparse), validConfig, { now: NOW });
+    const finding = find(report.violations, 'missing-item');
+    expect(finding?.severity).toBe('error');
+    expect(finding?.path).toBe('items[1]');
+  });
+
+  it('checkAsciiUppercase aggregates every bad character (no per-field short-circuit)', () => {
+    const report = validateBatch(
+      batchOf([q310Item({ diagnosticCode: 'aBcD' })]),
+      validConfig,
+      { now: NOW },
+    );
+    const lowercaseFindings = report.violations.filter(
+      (v) => v.code === 'lowercase-diagnostic-code',
+    );
+    expect(lowercaseFindings.length).toBe(2);
+  });
 });

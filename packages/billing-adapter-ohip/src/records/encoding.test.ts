@@ -49,6 +49,29 @@ describe('assertAsciiUpper', () => {
   it('rejects control characters (e.g. tab)', () => {
     expect(() => assertAsciiUpper('A\tB', 'x')).toThrow(EncodeException);
   });
+
+  it('classifies boundary bytes correctly (0x1F → non-printable, 0x7F → non-printable, 0x80 → non-ASCII)', () => {
+    // Pin describeEncodeError's classifier indirectly via the encoder.
+    // 0x1F (US, just-below-space): non-printable.
+    expect(() => assertAsciiUpper('A\x1FB', 'x')).toThrow(EncodeException);
+    // 0x7F (DEL, just-above-tilde): non-printable.
+    expect(() => assertAsciiUpper('A\x7FB', 'x')).toThrow(EncodeException);
+    // 0x80 (just-above-printable-ASCII): non-ASCII.
+    expect(() => assertAsciiUpper('A\x80B', 'x')).toThrow(EncodeException);
+  });
+
+  it('rejects a surrogate pair (emoji, non-BMP) with invalid-character-class', () => {
+    // Surrogate halves (0xD800-0xDFFF) are outside printable ASCII;
+    // without this throw, code-unit length mis-correlates with byte width.
+    try {
+      assertAsciiUpper('A\u{1F600}', 'x');
+      throw new Error('should have thrown');
+    } catch (e) {
+      expect(e).toBeInstanceOf(EncodeException);
+      const err = (e as EncodeException).error;
+      expect(err.kind).toBe('invalid-character-class');
+    }
+  });
 });
 
 describe('assertNumeric', () => {

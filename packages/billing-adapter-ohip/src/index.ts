@@ -12,10 +12,10 @@
 
 import {
   AdapterErrorException,
+  isBlockingFinding,
   type AdapterError,
   type ClaimBatch,
   type ClaimRenderer,
-  type Jurisdiction,
   type RenderedClaim,
   type ValidationReport,
   type ValidationViolation,
@@ -25,54 +25,22 @@ import {
   emitClaimFile,
   type OntarioMcedtConfig,
 } from './emit/emit-claim-file.js';
-import { EmitException, type EmitError } from './emit/errors.js';
-import { EncodeException } from './records/errors.js';
+import { EmitException, missingItemMessage, type EmitError } from './emit/errors.js';
+import {
+  ASCII_LOWERCASE_A,
+  ASCII_LOWERCASE_Z,
+  ASCII_SPACE,
+} from './records/encoding.js';
+import { EncodeException, type EncodeError } from './records/errors.js';
 import {
   validateBatch,
   type ValidateBatchOptions,
 } from './validate/validate-batch.js';
 
-export type {
-  OntarioMcedtIdentifiers,
-} from './types.js';
+export type { OntarioMcedtIdentifiers } from './types.js';
 export { ONTARIO_MCEDT_IDENTIFIER_KEYS } from './types.js';
-
-export {
-  encodeBatchHeader,
-  encodeClaimHeader,
-  encodeItemRecord,
-  encodeTrailer,
-  EncodeException,
-  type BatchHeaderInput,
-  type ClaimHeaderInput,
-  type ItemRecordInput,
-  type TrailerInput,
-  type EncodeError,
-  type EncodeErrorKind,
-  type FieldTooLongError,
-  type FieldWrongWidthError,
-  type InvalidCharacterClassError,
-  type InvalidDateError,
-  type InvalidNumericError,
-} from './records/index.js';
-
-export {
-  emitClaimFile,
-  EmitException,
-  type OntarioMcedtConfig,
-  type EmitError,
-  type EmitErrorKind,
-  type EmptyBatchError,
-  type FileTooLargeError,
-  type InconsistentGroupFieldError,
-  type PatientMissingRequiredFieldError,
-} from './emit/index.js';
-
-export {
-  validateBatch,
-  KNOWN_FEE_CODES,
-  type ValidateBatchOptions,
-} from './validate/index.js';
+export type { OntarioMcedtConfig };
+export type { ValidateBatchOptions };
 
 /**
  * Construction-time options for {@link OntarioMcedtAdapter}.
@@ -121,7 +89,7 @@ export interface OntarioMcedtAdapterOptions {
  * only at this phase. `canSubmit(adapter)` returns `false`.
  */
 export class OntarioMcedtAdapter implements ClaimRenderer {
-  readonly jurisdiction: Jurisdiction = 'ontario-mcedt';
+  readonly jurisdiction = 'ontario-mcedt' as const;
 
   private readonly config: OntarioMcedtConfig;
   private readonly validationOptions: ValidateBatchOptions;
@@ -145,8 +113,8 @@ export class OntarioMcedtAdapter implements ClaimRenderer {
 
   async render(batch: ClaimBatch): Promise<RenderedClaim> {
     const report = this.validate(batch);
-    const hasBlockingViolation = report.violations.some(
-      (v) => v.severity !== 'warning',
+    const hasBlockingViolation = report.violations.some((v) =>
+      isBlockingFinding(v.severity),
     );
     if (hasBlockingViolation) {
       throw new AdapterErrorException({ kind: 'validation', report });
@@ -186,13 +154,20 @@ export class OntarioMcedtAdapter implements ClaimRenderer {
 function describeEmitError(error: EmitError): string {
   switch (error.kind) {
     case 'empty-batch':
-      return error.message;
+      return 'batch contains zero claim items';
     case 'file-too-large':
       return `assembled file would exceed the MOH 10 MB limit (${error.fileSize} bytes > ${error.maxSize})`;
     case 'inconsistent-group-field':
-      return `items in a single claim envelope disagree on ${error.field}: ${JSON.stringify(error.firstValue)} vs ${JSON.stringify(error.conflictingValue)}`;
+      // versionCode values are PHI-adjacent — surface only the field name.
+      return `items in a single claim envelope disagree on ${error.field}`;
     case 'patient-missing-required-field':
       return `items[${error.itemIndex}] has a patient block with empty ${error.field}`;
+    case 'missing-item':
+      return missingItemMessage(error.itemIndex);
+    default: {
+      const _exhaustive: never = error;
+      throw new Error(`unhandled EmitError variant: ${String((_exhaustive as { kind?: unknown }).kind)}`);
+    }
   }
 }
 
@@ -200,7 +175,47 @@ function pathForEmitError(error: EmitError): string | undefined {
   if (error.kind === 'patient-missing-required-field') {
     return `items[${error.itemIndex}].patient.${error.field}`;
   }
+  if (error.kind === 'missing-item') {
+    return `items[${error.itemIndex}]`;
+  }
   return undefined;
+}
+
+/**
+ * PHI-scrubbed surface message for an `EncodeError`. The raw `value`
+ * and inner `message` carry PHI (a HIN/DoB/name); only structural
+ * facts cross the public boundary.
+ */
+function classifyBadAsciiByte(
+  code: number,
+): 'lowercase' | 'non-printable' | 'non-ASCII' | 'invalid' {
+  // Order matters: check non-ASCII (>=0x80) first, then non-printable
+  // controls (<0x20 || ==0x7F), then lowercase. The final `'invalid'`
+  // covers printable ASCII that fails a value-domain check (e.g.
+  // payee 'X' — printable, ASCII, uppercase, but not in {P,S}).
+  if (code >= 0x80) return 'non-ASCII';
+  if (code < ASCII_SPACE || code === 0x7f) return 'non-printable';
+  if (code >= ASCII_LOWERCASE_A && code <= ASCII_LOWERCASE_Z) return 'lowercase';
+  return 'invalid';
+}
+
+function describeEncodeError(error: EncodeError): string {
+  switch (error.kind) {
+    case 'invalid-character-class':
+      return `${classifyBadAsciiByte(error.badCharCode)} character at index ${error.badCharIndex}`;
+    case 'field-too-long':
+      return `value exceeds field width ${error.width}`;
+    case 'field-wrong-width':
+      return `value of length ${error.actualWidth} does not match required width ${error.expectedWidth}`;
+    case 'invalid-numeric':
+      return 'value contains non-numeric content';
+    case 'invalid-date':
+      return 'value is not a valid YYYY-MM-DD date';
+    default: {
+      const _exhaustive: never = error;
+      throw new Error(`unhandled EncodeError variant: ${String((_exhaustive as { kind?: unknown }).kind)}`);
+    }
+  }
 }
 
 /**
@@ -250,7 +265,7 @@ export function translateRenderException(cause: unknown): AdapterError {
     const violation: ValidationViolation = {
       severity: 'error',
       code: cause.error.kind,
-      message: cause.error.message,
+      message: describeEncodeError(cause.error),
       path: cause.error.path,
     };
     return { kind: 'validation', report: { violations: [violation] } };

@@ -27,7 +27,81 @@
 export type Jurisdiction =
   | 'ontario-mcedt'
   // Future: 'bc-msp', 'us-x12-837', 'de-kbv', 'fr-fse', 'za-medical-schemes', etc.
-  | (string & { readonly __jurisdictionBrand?: never });
+  // The `& {}` preserves literal autocomplete in TS without misleadingly
+  // suggesting the type is branded — any string is assignable.
+  | (string & {});
+
+declare const isoDateBrand: unique symbol;
+
+/**
+ * An ISO 8601 calendar date in `YYYY-MM-DD` form. The brand certifies
+ * shape, component-range, and calendar validity (no Feb 30) — all
+ * verified by {@link parseIsoDate}, the only legitimate constructor.
+ */
+export type IsoDate = string & { readonly [isoDateBrand]: true };
+
+const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * Single-pass shape + range + calendar-round-trip validation. Returns
+ * the brand and the UTC-midnight ms together so callers needing both
+ * (e.g. validators doing date arithmetic) walk the parse exactly once.
+ * Not exported — `parseIsoDate` and `isoDateToUtcMs` are the public
+ * entry points; this helper is the shared implementation.
+ */
+function parseIsoDateInternal(
+  value: string,
+): { readonly branded: IsoDate; readonly utcMs: number } | null {
+  const match = ISO_DATE_PATTERN.exec(value);
+  if (!match) return null;
+  const year = Number.parseInt(match[1] as string, 10);
+  const month = Number.parseInt(match[2] as string, 10);
+  const day = Number.parseInt(match[3] as string, 10);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const utcMs = Date.UTC(year, month - 1, day);
+  const reconstructed = new Date(utcMs);
+  if (
+    reconstructed.getUTCFullYear() !== year ||
+    reconstructed.getUTCMonth() !== month - 1 ||
+    reconstructed.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return { branded: value as IsoDate, utcMs };
+}
+
+/** Parse a `YYYY-MM-DD` string. Returns `null` on shape, range, or
+ *  calendar-validity failure (e.g. `'2024-02-30'`). */
+export function parseIsoDate(value: string): IsoDate | null {
+  return parseIsoDateInternal(value)?.branded ?? null;
+}
+
+declare const batchItemIndexBrand: unique symbol;
+
+/**
+ * A non-negative integer index into `ClaimBatch.items`. Used by
+ * `LineResult` and adapter-internal error types to refer to a specific
+ * caller-supplied item without admitting `NaN`, negatives, or floats.
+ */
+export type BatchItemIndex = number & { readonly [batchItemIndexBrand]: true };
+
+/** Brand a number as a {@link BatchItemIndex}, or `null` if invalid. */
+export function asBatchItemIndex(n: number): BatchItemIndex | null {
+  return Number.isInteger(n) && n >= 0 ? (n as BatchItemIndex) : null;
+}
+
+export function isoDateToUtcMs(value: IsoDate): number {
+  // Defense-in-depth: a forged `as IsoDate` cast can ship a
+  // shape-valid but calendar-invalid value (e.g. '2024-02-30').
+  // Without the round-trip check, Date.UTC silently normalizes
+  // (Feb 30 → Mar 1) and the brand's "calendar validity" guarantee
+  // evaporates.
+  const result = parseIsoDateInternal(value);
+  if (!result) {
+    throw new Error('IsoDate brand violated: not a valid YYYY-MM-DD calendar day');
+  }
+  return result.utcMs;
+}
 
 /**
  * Identifies a submitting entity registered with a deployment of the substrate.
@@ -61,12 +135,12 @@ export interface ClaimBatch {
 }
 
 /**
- * Service period the batch covers, expressed as ISO 8601 date strings
- * (`YYYY-MM-DD`). Inclusive on both ends.
+ * Service period the batch covers, expressed as ISO 8601 calendar
+ * dates. Inclusive on both ends.
  */
 export interface ServicePeriod {
-  readonly start: string;
-  readonly end: string;
+  readonly start: IsoDate;
+  readonly end: IsoDate;
 }
 
 /**
@@ -82,8 +156,7 @@ export interface ServicePeriod {
  * with the last two digits as cents.
  */
 export interface ClaimItem {
-  /** ISO 8601 date string (`YYYY-MM-DD`). */
-  readonly serviceDate: string;
+  readonly serviceDate: IsoDate;
   /** Jurisdiction-specific fee code (e.g. `Q310A`, `A007A`, US CPT codes). */
   readonly feeCode: string;
   /** Number of service units (e.g. 15-minute increments for Ontario hourly). */
@@ -107,8 +180,7 @@ export interface PatientReference {
   readonly healthNumber: string;
   /** Version code where the jurisdiction tracks card revisions. */
   readonly versionCode?: string;
-  /** ISO 8601 date string (`YYYY-MM-DD`). */
-  readonly dateOfBirth: string;
+  readonly dateOfBirth: IsoDate;
 }
 
 /**
@@ -128,6 +200,26 @@ export interface RenderedClaim {
  * Severity of a single validation finding.
  */
 export type Severity = 'error' | 'warning';
+
+/**
+ * True when a finding at this severity blocks `render` / `submit`.
+ * Compile-time exhaustive (the `never` assignment in the default
+ * fails the build if a future {@link Severity} addition isn't
+ * handled) AND runtime fail-closed (throws if a future variant
+ * arrives via `as`-cast / JS bypass).
+ */
+export function isBlockingFinding(severity: Severity): boolean {
+  switch (severity) {
+    case 'error':
+      return true;
+    case 'warning':
+      return false;
+    default: {
+      const _exhaustive: never = severity;
+      throw new Error(`unhandled Severity: ${String(_exhaustive)}`);
+    }
+  }
+}
 
 /**
  * One validation finding from an adapter's pre-flight check. Carries enough

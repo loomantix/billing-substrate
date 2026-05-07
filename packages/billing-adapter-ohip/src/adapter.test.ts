@@ -9,6 +9,7 @@
 
 import {
   AdapterErrorException,
+  asBatchItemIndex,
   canSubmit,
   type AdapterError,
   type ClaimBatch,
@@ -262,10 +263,32 @@ describe('translateRenderException — defense-in-depth contract translation', (
     const v = result.report.violations[0]!;
     expect(v.severity).toBe('error');
     expect(v.code).toBe('empty-batch');
-    expect(v.message).toBe(inner.error.message);
+    expect(v.message).toContain('zero claim items');
   });
 
-  it('sanitizes inconsistent-group-field — does NOT echo groupKey (PHI: HIN|DoB|date)', () => {
+  it('sanitizes inconsistent-group-field — does NOT echo groupKey (HIN|DoB|date) or values (versionCode is PHI-adjacent)', () => {
+    const inner = new EmitException({
+      kind: 'inconsistent-group-field',
+      field: 'versionCode',
+      groupKey: '1234567890|1980-04-19|2026-04-19',
+      firstValue: 'AB',
+      conflictingValue: 'CD',
+      message:
+        'items in claim envelope 1234567890|1980-04-19|2026-04-19 disagree on versionCode',
+    });
+    const result = translateRenderException(inner);
+    expect(result.kind).toBe('validation');
+    if (result.kind !== 'validation') return;
+    const v = result.report.violations[0]!;
+    expect(v.code).toBe('inconsistent-group-field');
+    expect(v.message).not.toContain('1234567890');
+    expect(v.message).not.toContain('1980-04-19');
+    expect(v.message).not.toContain('AB');
+    expect(v.message).not.toContain('CD');
+    expect(v.message).toContain('versionCode');
+  });
+
+  it('EmitException.message itself does NOT carry PHI — only the structured kind summary', () => {
     const inner = new EmitException({
       kind: 'inconsistent-group-field',
       field: 'serviceLocation',
@@ -275,16 +298,108 @@ describe('translateRenderException — defense-in-depth contract translation', (
       message:
         'items in claim envelope 1234567890|1980-04-19|2026-04-19 disagree on serviceLocation',
     });
-    const result = translateRenderException(inner);
-    expect(result.kind).toBe('validation');
-    if (result.kind !== 'validation') return;
-    const v = result.report.violations[0]!;
-    expect(v.code).toBe('inconsistent-group-field');
-    expect(v.message).not.toContain('1234567890');
-    expect(v.message).not.toContain('1980-04-19');
-    expect(v.message).toContain('serviceLocation');
-    expect(v.message).toContain('HOSP');
-    expect(v.message).toContain('OFFC');
+    expect(inner.message).not.toContain('1234567890');
+    expect(inner.message).not.toContain('1980-04-19');
+    expect(inner.message).not.toContain('HOSP');
+    expect(inner.message).not.toContain('OFFC');
+    expect(inner.message).toContain('inconsistent-group-field');
+  });
+
+  it('EmitException survives JSON.stringify and util.inspect without leaking the structured payload', async () => {
+    const { inspect } = await import('node:util');
+    const inner = new EmitException({
+      kind: 'inconsistent-group-field',
+      field: 'serviceLocation',
+      groupKey: '1234567890|1980-04-19|2026-04-19',
+      firstValue: 'HOSP',
+      conflictingValue: 'OFFC',
+      message: 'should not appear',
+    });
+    const json = JSON.stringify(inner);
+    expect(json).not.toContain('1234567890');
+    expect(json).not.toContain('groupKey');
+    expect(json).not.toContain('HOSP');
+
+    const inspected = inspect(inner);
+    expect(inspected).not.toContain('1234567890');
+    expect(inspected).not.toContain('HOSP');
+  });
+
+  it('EmitException keeps `.error` non-enumerable to defend against own-enumerable-property serializers', () => {
+    const inner = new EmitException({
+      kind: 'inconsistent-group-field',
+      field: 'serviceLocation',
+      groupKey: '1234567890|1980-04-19|2026-04-19',
+      firstValue: 'HOSP',
+      conflictingValue: 'OFFC',
+      message: 'irrelevant',
+    });
+    expect(inner.error.kind).toBe('inconsistent-group-field');
+    expect(Object.keys(inner)).not.toContain('error');
+    expect(Object.getOwnPropertyDescriptor(inner, 'error')?.enumerable).toBe(false);
+    expect({ ...inner }).not.toHaveProperty('error');
+  });
+
+  it('EncodeException keeps `.error` non-enumerable to defend against own-enumerable-property serializers', () => {
+    const inner = new EncodeException({
+      kind: 'invalid-date',
+      path: 'items[0].patient.dateOfBirth',
+      value: '1980-04-19',
+      message: 'expected YYYY-MM-DD',
+    });
+    expect(inner.error.kind).toBe('invalid-date');
+    expect(Object.keys(inner)).not.toContain('error');
+    expect(Object.getOwnPropertyDescriptor(inner, 'error')?.enumerable).toBe(false);
+    expect({ ...inner }).not.toHaveProperty('error');
+  });
+
+  it('EncodeException survives JSON.stringify and util.inspect without leaking the raw value', async () => {
+    const { inspect } = await import('node:util');
+    const inner = new EncodeException({
+      kind: 'invalid-date',
+      path: 'items[0].patient.dateOfBirth',
+      value: '1980-04-19',
+      message: 'expected YYYY-MM-DD, got "1980-04-19"',
+    });
+    const json = JSON.stringify(inner);
+    expect(json).not.toContain('1980-04-19');
+    expect(json).not.toContain('expected YYYY-MM-DD');
+
+    const inspected = inspect(inner);
+    expect(inspected).not.toContain('1980-04-19');
+  });
+
+  it('EncodeException.toJSON exposes name + message + kind + path positively (path is structural, never PHI)', () => {
+    // Pin the shape so a regression that drops `path` (which is needed
+    // for caller debugging) or accidentally adds `value` (which leaks)
+    // fails the test. The path field is always a field name like
+    // `items[0].patient.dateOfBirth` — structural, never PHI.
+    const inner = new EncodeException({
+      kind: 'field-too-long',
+      path: 'items[3].patient.healthNumber',
+      value: '12345678901',
+      width: 10,
+      message: 'value of length 11 exceeds field width 10',
+    });
+    expect(JSON.parse(JSON.stringify(inner))).toEqual({
+      name: 'EncodeException',
+      message: 'field-too-long: items[3].patient.healthNumber',
+      kind: 'field-too-long',
+      path: 'items[3].patient.healthNumber',
+    });
+  });
+
+  it('EmitException.toJSON exposes name + message + kind positively (no path field on EmitError union)', () => {
+    const inner = new EmitException({
+      kind: 'missing-item',
+      itemIndex: asBatchItemIndex(0)!,
+      message: 'items[0] is missing',
+    });
+    expect(JSON.parse(JSON.stringify(inner))).toEqual({
+      name: 'EmitException',
+      message: 'missing-item: items[0]',
+      kind: 'missing-item',
+    });
   });
 
   it('translates file-too-large with size context but no PHI', () => {
@@ -317,7 +432,7 @@ describe('translateRenderException — defense-in-depth contract translation', (
     expect(v.path).toBe('items[3].patient.healthNumber');
   });
 
-  it('translates EncodeException into kind="validation" carrying the field path', () => {
+  it('translates EncodeException into kind="validation" carrying the field path with a scrubbed message', () => {
     const inner = new EncodeException({
       kind: 'field-wrong-width',
       path: 'mohOfficeCode',
@@ -332,7 +447,112 @@ describe('translateRenderException — defense-in-depth contract translation', (
     const v = result.report.violations[0]!;
     expect(v.code).toBe('field-wrong-width');
     expect(v.path).toBe('mohOfficeCode');
-    expect(v.message).toBe(inner.error.message);
+    expect(v.message).toContain('width 1');
+    expect(v.message).not.toContain('07');
+  });
+
+  it('sanitizes EncodeException invalid-date — does NOT echo the raw value (PHI: dateOfBirth)', () => {
+    const inner = new EncodeException({
+      kind: 'invalid-date',
+      path: 'items[0].patient.dateOfBirth',
+      value: '1980-04-19',
+      message: 'expected YYYY-MM-DD (or empty for unpopulated), got "1980-04-19"',
+    });
+    const result = translateRenderException(inner);
+    expect(result.kind).toBe('validation');
+    if (result.kind !== 'validation') return;
+    const v = result.report.violations[0]!;
+    expect(v.code).toBe('invalid-date');
+    expect(v.path).toBe('items[0].patient.dateOfBirth');
+    expect(v.message).not.toContain('1980-04-19');
+    expect(v.message).not.toContain('1980');
+  });
+
+  it('sanitizes EncodeException field-too-long — does NOT echo the raw value (PHI: HIN, name)', () => {
+    const inner = new EncodeException({
+      kind: 'field-too-long',
+      path: 'items[0].patient.healthNumber',
+      value: '12345678901',
+      width: 10,
+      message: 'value of length 11 exceeds field width 10',
+    });
+    const result = translateRenderException(inner);
+    expect(result.kind).toBe('validation');
+    if (result.kind !== 'validation') return;
+    const v = result.report.violations[0]!;
+    expect(v.code).toBe('field-too-long');
+    expect(v.path).toBe('items[0].patient.healthNumber');
+    expect(v.message).not.toContain('12345678901');
+    expect(v.message).toContain('width 10');
+  });
+
+  it('sanitizes EncodeException invalid-numeric — does NOT echo the raw value', () => {
+    const inner = new EncodeException({
+      kind: 'invalid-numeric',
+      path: 'items[0].patient.healthNumber',
+      value: '12345abc90',
+      message: 'non-digit character at index 5',
+    });
+    const result = translateRenderException(inner);
+    expect(result.kind).toBe('validation');
+    if (result.kind !== 'validation') return;
+    const v = result.report.violations[0]!;
+    expect(v.code).toBe('invalid-numeric');
+    expect(v.message).not.toContain('12345abc90');
+    expect(v.message).not.toContain('abc');
+  });
+
+  it('classifies bad bytes correctly through the surface message (lowercase / non-printable / non-ASCII / invalid)', () => {
+    // Pin classifyBadAsciiByte's category mapping via the surface
+    // message. The reordering bug — where 0x80+ matched the
+    // non-printable branch first and the non-ASCII branch was
+    // unreachable — would silently pass a "throws" test. We need
+    // the category itself in the assertion.
+    const cases: Array<[number, string]> = [
+      [0x61, 'lowercase'],       // 'a'
+      [0x7a, 'lowercase'],       // 'z'
+      [0x1f, 'non-printable'],   // US (just below space)
+      [0x7f, 'non-printable'],   // DEL
+      [0x00, 'non-printable'],   // NUL
+      [0x80, 'non-ASCII'],       // just above printable ASCII
+      [0xff, 'non-ASCII'],       // high byte
+      [0x58, 'invalid'],         // 'X' — printable ASCII, uppercase, but not in {P,S} for payee
+      [0x60, 'invalid'],         // backtick — printable ASCII, not lowercase letter
+    ];
+    for (const [code, expectedClass] of cases) {
+      const inner = new EncodeException({
+        kind: 'invalid-character-class',
+        path: 'payee',
+        value: String.fromCharCode(code),
+        badCharCode: code,
+        badCharIndex: 0,
+        message: 'irrelevant',
+      });
+      const result = translateRenderException(inner);
+      if (result.kind !== 'validation') {
+        throw new Error(`expected validation for code 0x${code.toString(16)}`);
+      }
+      const surfaceMessage = result.report.violations[0]!.message;
+      expect(surfaceMessage).toContain(expectedClass);
+    }
+  });
+
+  it('sanitizes EncodeException invalid-character-class — does NOT echo the raw value (PHI: HIN, name)', () => {
+    const inner = new EncodeException({
+      kind: 'invalid-character-class',
+      path: 'items[0].patient.healthNumber',
+      value: '1234567890',
+      badCharCode: 49,
+      badCharIndex: 0,
+      message: "lowercase character '1' at index 0; MCEDT requires uppercase",
+    });
+    const result = translateRenderException(inner);
+    expect(result.kind).toBe('validation');
+    if (result.kind !== 'validation') return;
+    const v = result.report.violations[0]!;
+    expect(v.code).toBe('invalid-character-class');
+    expect(v.path).toBe('items[0].patient.healthNumber');
+    expect(v.message).not.toContain('1234567890');
   });
 
   it('translates an unknown Error into kind="rejected" with a generic message (no PHI leak)', () => {

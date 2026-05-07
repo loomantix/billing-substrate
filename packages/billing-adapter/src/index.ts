@@ -26,25 +26,35 @@ export type {
 } from './adapter.js';
 
 // Credentials
-export type { SubmitterCredentials } from './credentials.js';
+export { SubmitterCredentials } from './credentials.js';
+export type { SubmitterCredentialsInput } from './credentials.js';
 
 // Submission lifecycle
 export type {
   AdjudicationResult,
   LineOutcome,
   LineResult,
+  OpaqueAdapterState,
   PollOutcome,
   SubmitReceipt,
 } from './submission.js';
 
 // Errors
-export { AdapterErrorException, describeAdapterError } from './errors.js';
-export type { AdapterError } from './errors.js';
+export { AdapterErrorException, describeAdapterError, scrubCause } from './errors.js';
+export type { AdapterError, ScrubbedCause } from './errors.js';
 
 // Data shapes
+export {
+  asBatchItemIndex,
+  isBlockingFinding,
+  isoDateToUtcMs,
+  parseIsoDate,
+} from './types.js';
 export type {
+  BatchItemIndex,
   ClaimBatch,
   ClaimItem,
+  IsoDate,
   Jurisdiction,
   PatientReference,
   RenderedClaim,

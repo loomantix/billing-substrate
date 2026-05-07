@@ -272,6 +272,25 @@ describe('emitClaimFile — error handling', () => {
     }
   });
 
+  it('rejects a sparse-array hole in items with missing-item rather than silently dropping', async () => {
+    const items: ClaimItem[] = [
+      q310Item('2026-04-19', 4),
+      undefined as unknown as ClaimItem,
+      q310Item('2026-04-22', 2),
+    ];
+    try {
+      await emitClaimFile(batchOf(items), config);
+      throw new Error('should have thrown');
+    } catch (e) {
+      expect(e).toBeInstanceOf(EmitException);
+      const err = (e as EmitException).error;
+      expect(err.kind).toBe('missing-item');
+      if (err.kind === 'missing-item') {
+        expect(err.itemIndex).toBe(1);
+      }
+    }
+  });
+
   it('rejects a batch that would exceed the 10MB MOH limit', async () => {
     const itemCount = Math.ceil((10 * 1024 * 1024) / 80) + 100;
     const items: ClaimItem[] = Array.from({ length: itemCount }, (_, i) =>

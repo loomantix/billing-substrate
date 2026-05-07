@@ -19,6 +19,42 @@
 
 import type { ValidationReport } from './types.js';
 
+declare const scrubbedCauseBrand: unique symbol;
+
+/**
+ * Sanitized cause attached to a `transport`-variant `AdapterError`.
+ * The brand is constructed only by {@link scrubCause} — the raw
+ * exception cannot satisfy it structurally, even via spread or
+ * `Object.assign`, so a fetch/TLS error carrying request headers,
+ * bodies, or stack frames cannot reach `Error.cause` accidentally.
+ */
+export interface ScrubbedCause {
+  readonly name: string;
+  readonly message: string;
+  readonly status?: number;
+  readonly [scrubbedCauseBrand]: true;
+}
+
+/**
+ * Construct a {@link ScrubbedCause} from arbitrary input. The only
+ * legitimate constructor — adapters MUST route raw `fetch`/TLS
+ * failures through this. Returns the brand on success, `null` if
+ * input has no usable surface (e.g. `null`, primitive, or an object
+ * with neither `name` nor `message`).
+ */
+export function scrubCause(input: unknown): ScrubbedCause | null {
+  if (input === null || typeof input !== 'object') return null;
+  const src = input as { name?: unknown; message?: unknown; status?: unknown };
+  const name = typeof src.name === 'string' ? src.name : 'Error';
+  const message = typeof src.message === 'string' ? src.message : '';
+  if (name === 'Error' && message === '') return null;
+  const out: { name: string; message: string; status?: number } = { name, message };
+  if (typeof src.status === 'number' && Number.isFinite(src.status)) {
+    out.status = src.status;
+  }
+  return out as ScrubbedCause;
+}
+
 export type AdapterError =
   | {
       readonly kind: 'validation';
@@ -27,7 +63,7 @@ export type AdapterError =
   | {
       readonly kind: 'transport';
       readonly message: string;
-      readonly cause?: unknown;
+      readonly cause?: ScrubbedCause;
     }
   | {
       readonly kind: 'auth';
@@ -65,8 +101,8 @@ export type AdapterError =
  * Adapters MUST scrub PHI from any string they surface through
  * `AdapterError.message` / `ValidationViolation.message` *before* the
  * payload reaches this helper. This helper just formats; it does not
- * sanitize. (See `describeEmitError` in `@loomantix/billing-adapter-ohip`
- * for the OHIP-side scrubbing pattern.)
+ * sanitize. (See `describeEmitError` / `describeEncodeError` in
+ * `@loomantix/billing-adapter-ohip` for the OHIP-side scrubbing pattern.)
  */
 export function describeAdapterError(error: AdapterError): string {
   switch (error.kind) {
@@ -91,8 +127,8 @@ export function describeAdapterError(error: AdapterError): string {
     case 'not-supported':
       return error.operation;
     default: {
-      const exhaustive: never = error;
-      return exhaustive;
+      const _exhaustive: never = error;
+      throw new Error(`unhandled AdapterError variant: ${String((_exhaustive as { kind?: unknown }).kind)}`);
     }
   }
 }
@@ -123,20 +159,46 @@ export function describeAdapterError(error: AdapterError): string {
  * }
  * ```
  */
+function safeError(error: AdapterError): AdapterError {
+  // Re-scrub `cause` defensively. The compile-time `ScrubbedCause`
+  // brand is the first line; `scrubCause` runtime-rebuilds the value
+  // so a forged `as`-cast can't carry hostile fields onto `this.error`.
+  if (error.kind !== 'transport' || error.cause === undefined) return error;
+  const rescrubbed = scrubCause(error.cause);
+  return rescrubbed === null
+    ? { kind: 'transport', message: error.message }
+    : { kind: 'transport', message: error.message, cause: rescrubbed };
+}
+
 export class AdapterErrorException extends Error {
-  readonly error: AdapterError;
+  readonly error!: AdapterError;
 
   constructor(error: AdapterError) {
-    // Propagate the underlying cause (only `transport` carries one in the
-    // current union) into `Error.cause` so `util.inspect`, Sentry, and
-    // OTel exporters render the chain. Without this the wrapper would
-    // hide the very context it was added to surface.
+    const safe = safeError(error);
     const options =
-      error.kind === 'transport' && error.cause !== undefined
-        ? { cause: error.cause }
+      safe.kind === 'transport' && safe.cause !== undefined
+        ? { cause: safe.cause }
         : undefined;
-    super(`${error.kind}: ${describeAdapterError(error)}`, options);
+    super(`${safe.kind}: ${describeAdapterError(safe)}`, options);
     this.name = 'AdapterErrorException';
-    this.error = error;
+    // Non-enumerable so structured loggers that copy own enumerable
+    // properties (without honoring toJSON / util.inspect.custom)
+    // can't serialize the payload — `error.report.violations`,
+    // `error.cause`, etc. would otherwise leak even though the
+    // visible message is scrubbed.
+    Object.defineProperty(this, 'error', {
+      value: safe,
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    });
+  }
+
+  toJSON(): { readonly name: string; readonly message: string; readonly kind: AdapterError['kind'] } {
+    return { name: this.name, message: this.message, kind: this.error.kind };
+  }
+
+  [Symbol.for('nodejs.util.inspect.custom')](): string {
+    return `${this.name}: ${this.message}`;
   }
 }

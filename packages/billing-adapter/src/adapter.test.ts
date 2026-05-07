@@ -10,7 +10,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { canSubmit } from './adapter.js';
-import { AdapterErrorException, describeAdapterError } from './errors.js';
+import { SubmitterCredentials } from './credentials.js';
+import { AdapterErrorException, describeAdapterError, scrubCause } from './errors.js';
 import type {
   AdapterError,
   AdjudicationResult,
@@ -18,10 +19,10 @@ import type {
   ClaimRenderer,
   ClaimSubmitter,
   LineOutcome,
+  OpaqueAdapterState,
   PollOutcome,
   RenderedClaim,
   SubmitReceipt,
-  SubmitterCredentials,
   SubmitterIdentity,
   ValidationReport,
 } from './index.js';
@@ -96,14 +97,30 @@ describe('JurisdictionAdapter contract', () => {
       displayName: 'Test',
       identifiers: { groupNumber: '0A12' },
     };
-    const credentials: SubmitterCredentials = {
+    const credentials = new SubmitterCredentials({
       jurisdiction: 'ontario-mcedt',
       material: { certificatePem: 'stub' },
-    };
+    });
     const receipt = await adapter.submit(rendered, submitter, credentials);
     expect(receipt.externalId).toBe('edt-resource-stub');
     const outcome = await adapter.poll(receipt, credentials);
     expect(outcome.kind).toBe('pending');
+  });
+
+  it('SubmitReceipt.opaqueState round-trips through JSON-clone untouched', () => {
+    // Pins the contract that consumers persist-and-forward `opaqueState`
+    // unchanged. A regression that drops the field on serialization or
+    // mutates it would silently break poll() for any adapter using a
+    // remittance cursor.
+    const original: SubmitReceipt = {
+      jurisdiction: 'ontario-mcedt',
+      externalId: 'edt-resource-stub',
+      submittedAt: '2026-05-02T00:00:00Z',
+      opaqueState: 'cursor:42|page:3|gen:abc123' as OpaqueAdapterState,
+    };
+    const cloned: SubmitReceipt = JSON.parse(JSON.stringify(original));
+    expect(cloned.opaqueState).toBe('cursor:42|page:3|gen:abc123');
+    expect(cloned).toEqual(original);
   });
 
   describe('canSubmit type guard', () => {
@@ -258,14 +275,93 @@ describe('JurisdictionAdapter contract', () => {
       expect(describeAdapterError({ kind: 'auth', message: '' })).not.toBe('');
     });
 
-    it('propagates transport error cause into Error.cause for chained-exception logging', () => {
-      const underlying = new Error('EHOSTUNREACH 10.0.0.1:443');
+    it('propagates a scrubbed transport cause into Error.cause for chained-exception logging', () => {
+      const scrubbed = scrubCause({
+        name: 'TransportError',
+        message: 'EHOSTUNREACH',
+        status: 503,
+      })!;
       const e = new AdapterErrorException({
         kind: 'transport',
         message: 'connection refused',
-        cause: underlying,
+        cause: scrubbed,
       });
-      expect(e.cause).toBe(underlying);
+      expect(e.cause).toEqual({
+        name: 'TransportError',
+        message: 'EHOSTUNREACH',
+        status: 503,
+      });
+    });
+
+    it('runtime-rebuilds cause even when caller bypasses the brand via as-cast', () => {
+      const dangerous = {
+        name: 'AxiosError',
+        message: 'Request failed with status code 401',
+        status: 401,
+        config: { headers: { Authorization: 'Bearer SECRET-TOKEN' } },
+        request: { _header: 'POST / HTTP/1.1\nAuthorization: Bearer SECRET' },
+        stack: 'Error: ...\n  at /path/to/secret-file.ts:42',
+      };
+
+      const e = new AdapterErrorException({
+        kind: 'transport',
+        message: 'auth failed',
+        cause: dangerous as unknown as ReturnType<typeof scrubCause> & object,
+      });
+
+      expect(e.cause).toEqual({
+        name: 'AxiosError',
+        message: 'Request failed with status code 401',
+        status: 401,
+      });
+      expect(e.cause).not.toBe(dangerous);
+      const inspected = JSON.stringify(e.cause);
+      expect(inspected).not.toContain('SECRET-TOKEN');
+      expect(inspected).not.toContain('Authorization');
+      expect(inspected).not.toContain('secret-file');
+    });
+
+    it('drops cause entirely when the input cannot be scrubbed (null / primitive / empty)', () => {
+      for (const dangerous of [null, undefined, 'string', 42, {}]) {
+        const e = new AdapterErrorException({
+          kind: 'transport',
+          message: 'unspec',
+          cause: dangerous as unknown as ReturnType<typeof scrubCause> & object,
+        });
+        expect(e.cause).toBeUndefined();
+        expect(e.error.kind).toBe('transport');
+        if (e.error.kind === 'transport') {
+          expect(e.error.cause).toBeUndefined();
+        }
+      }
+    });
+
+    it('rejects NaN/Infinity for status (uses Number.isFinite)', () => {
+      const c = scrubCause({ name: 'X', message: 'y', status: Number.NaN });
+      expect(c).not.toBeNull();
+      expect(c?.status).toBeUndefined();
+
+      const c2 = scrubCause({ name: 'X', message: 'y', status: Infinity });
+      expect(c2?.status).toBeUndefined();
+
+      const c3 = scrubCause({ name: 'X', message: 'y', status: 503 });
+      expect(c3?.status).toBe(503);
+    });
+
+    it('coerces non-string name to "Error" and non-string message to "" (defensive type narrowing)', () => {
+      // A JS bypass / `as`-cast can pass an object whose name or message
+      // is the wrong runtime type. The factory must coerce rather than
+      // crash or echo. As long as either field has a usable string,
+      // the cause is kept (with the bad field defaulted).
+      const c = scrubCause({ name: 123, message: 'real error message' });
+      expect(c).toEqual({ name: 'Error', message: 'real error message' });
+
+      const c2 = scrubCause({ name: 'TypeError', message: { not: 'a string' } });
+      expect(c2).toEqual({ name: 'TypeError', message: '' });
+
+      // Both bad → returns null (no usable surface, drop the cause).
+      const c3 = scrubCause({ name: 42, message: { still: 'bad' } });
+      expect(c3).toBeNull();
     });
 
     it('omits Error.cause when the transport variant supplies no cause', () => {
@@ -283,6 +379,109 @@ describe('JurisdictionAdapter contract', () => {
         message: 'jurisdiction said no',
       });
       expect(e.cause).toBeUndefined();
+    });
+
+    describe('SubmitterCredentials redaction', () => {
+      it('redacts material under JSON.stringify', () => {
+        const creds = new SubmitterCredentials({
+          jurisdiction: 'ontario-mcedt',
+          material: {
+            certificatePem: '-----BEGIN CERTIFICATE-----\nSECRET\n-----END CERTIFICATE-----',
+            privateKeyPem: '-----BEGIN PRIVATE KEY-----\nSECRET\n-----END PRIVATE KEY-----',
+          },
+        });
+        const json = JSON.stringify(creds);
+        expect(json).not.toContain('SECRET');
+        expect(json).not.toContain('BEGIN CERTIFICATE');
+        expect(json).toContain('[redacted]');
+      });
+
+      it('redacts material under util.inspect (console.log path)', async () => {
+        const { inspect } = await import('node:util');
+        const creds = new SubmitterCredentials({
+          jurisdiction: 'ontario-mcedt',
+          material: {
+            certificatePem: 'SECRET-CERT',
+            privateKeyPem: 'SECRET-KEY',
+          },
+        });
+        const inspected = inspect(creds);
+        expect(inspected).not.toContain('SECRET-CERT');
+        expect(inspected).not.toContain('SECRET-KEY');
+        expect(inspected).toContain('[redacted]');
+      });
+
+      it('redacts material when wrapped in a plain object that is logged', async () => {
+        const { inspect } = await import('node:util');
+        const creds = new SubmitterCredentials({
+          jurisdiction: 'ontario-mcedt',
+          material: { certificatePem: 'SECRET-WRAPPED' },
+        });
+        const wrapped = { op: 'submit', creds };
+        expect(JSON.stringify(wrapped)).not.toContain('SECRET-WRAPPED');
+        expect(inspect(wrapped)).not.toContain('SECRET-WRAPPED');
+        expect(JSON.parse(JSON.stringify(wrapped)).creds.material).toBe('[redacted]');
+      });
+
+      it('exposes material only through the get accessor', () => {
+        const creds = new SubmitterCredentials({
+          jurisdiction: 'ontario-mcedt',
+          material: { certificatePem: 'value' },
+        });
+        expect(creds.get('certificatePem')).toBe('value');
+        expect(creds.get('missing')).toBeUndefined();
+        expect(creds.has('certificatePem')).toBe(true);
+        expect(creds.has('missing')).toBe(false);
+        expect((creds as unknown as { material?: unknown }).material).toBeUndefined();
+      });
+
+      it('exposes the key list without values', () => {
+        const creds = new SubmitterCredentials({
+          jurisdiction: 'ontario-mcedt',
+          material: { certificatePem: 'A', privateKeyPem: 'B' },
+        });
+        const keys = creds.keys();
+        expect([...keys].sort()).toEqual(['certificatePem', 'privateKeyPem']);
+      });
+
+      it('snapshots Uint8Array material on construction (caller mutation does not leak)', () => {
+        const original = new Uint8Array([1, 2, 3]);
+        const creds = new SubmitterCredentials({
+          jurisdiction: 'ontario-mcedt',
+          material: { signingKey: original },
+        });
+        original[0] = 0xff;
+        const stored = creds.get('signingKey');
+        expect(stored).toBeInstanceOf(Uint8Array);
+        expect((stored as Uint8Array)[0]).toBe(1);
+      });
+
+      it('rejects non-string non-Uint8Array material values at construction', () => {
+        expect(
+          () =>
+            new SubmitterCredentials({
+              jurisdiction: 'ontario-mcedt',
+              material: {
+                badShape: new ArrayBuffer(8) as unknown as Uint8Array,
+              },
+            }),
+        ).toThrow(TypeError);
+      });
+    });
+
+    it('keeps `.error` non-enumerable so structured loggers walking own enumerable props cannot serialize the payload', () => {
+      // Defense-in-depth: toJSON / util.inspect.custom catch
+      // well-behaved serializers, but pino-style "copy own enumerable
+      // properties" pipelines bypass those hooks. Non-enumerable
+      // makes the payload invisible to that path too.
+      const e = new AdapterErrorException({
+        kind: 'validation',
+        report: { violations: [{ severity: 'error', code: 'leak-test', message: 'should not appear' }] },
+      });
+      expect(e.error.kind).toBe('validation');
+      expect(Object.keys(e)).not.toContain('error');
+      expect(Object.getOwnPropertyDescriptor(e, 'error')?.enumerable).toBe(false);
+      expect({ ...e }).not.toHaveProperty('error');
     });
 
     it('throws and catches as Error (consumer ergonomics)', () => {

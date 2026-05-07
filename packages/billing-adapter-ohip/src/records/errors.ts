@@ -76,12 +76,35 @@ export type EncodeErrorKind = EncodeError['kind'];
  * Thrown by record encoders. Wraps a discriminated `EncodeError` payload so
  * callers can `instanceof EncodeException` then narrow on `error.kind`.
  */
+function buildEncodeExceptionMessage(error: EncodeError): string {
+  // Inner `error.message` interpolates the raw value for several
+  // variants (PHI for HIN/DoB/name fields). Keep it off `Error.message`.
+  return `${error.kind}: ${error.path}`;
+}
+
 export class EncodeException extends Error {
-  readonly error: EncodeError;
+  readonly error!: EncodeError;
 
   constructor(error: EncodeError) {
-    super(`${error.path}: ${error.message}`);
+    super(buildEncodeExceptionMessage(error));
     this.name = 'EncodeException';
-    this.error = error;
+    // Non-enumerable: defends against structured loggers that copy
+    // own enumerable properties without calling toJSON / inspect —
+    // the raw `error.value` (PHI for HIN/DoB/name fields) would
+    // otherwise leak via the default own-property walk.
+    Object.defineProperty(this, 'error', {
+      value: error,
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    });
+  }
+
+  toJSON(): { readonly name: string; readonly message: string; readonly kind: EncodeError['kind']; readonly path: string } {
+    return { name: this.name, message: this.message, kind: this.error.kind, path: this.error.path };
+  }
+
+  [Symbol.for('nodejs.util.inspect.custom')](): string {
+    return `${this.name}: ${this.message}`;
   }
 }

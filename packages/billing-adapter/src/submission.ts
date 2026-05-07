@@ -11,12 +11,23 @@
  *   resource (or the same receipt) — never a duplicate claim downstream.
  */
 
-import type { Jurisdiction } from './types.js';
+import type { BatchItemIndex, Jurisdiction } from './types.js';
+
+declare const opaqueAdapterStateBrand: unique symbol;
+
+/**
+ * Adapter-internal `poll` state, persisted by the consumer. The brand
+ * is constructed inside the adapter (via `as OpaqueAdapterState`); the
+ * consumer's only legitimate operation is round-trip storage and
+ * forward-on-poll. Adapters MUST NOT encode credentials or PHI here —
+ * the value crosses the consumer's persistence boundary like the rest
+ * of the receipt.
+ */
+export type OpaqueAdapterState = string & { readonly [opaqueAdapterStateBrand]: true };
 
 /**
  * Receipt issued by the jurisdiction after a successful upload + submit.
- * The consumer persists this and passes it to `poll` to fetch the
- * adjudication outcome later.
+ * Consumers MUST treat as opaque — persist and forward unchanged.
  */
 export interface SubmitReceipt {
   readonly jurisdiction: Jurisdiction;
@@ -24,6 +35,7 @@ export interface SubmitReceipt {
   readonly externalId: string;
   /** ISO 8601 UTC timestamp of jurisdictional acceptance. */
   readonly submittedAt: string;
+  readonly opaqueState?: OpaqueAdapterState;
 }
 
 /**
@@ -48,7 +60,7 @@ export interface AdjudicationResult {
 
 export interface LineResult {
   /** Index into the originally submitted `ClaimBatch.items`. */
-  readonly itemIndex: number;
+  readonly itemIndex: BatchItemIndex;
   readonly outcome: LineOutcome;
 }
 
