@@ -179,8 +179,9 @@ describe('isoDateToUtcMs', () => {
     expect(isoDateToUtcMs(date)).toBe(Date.UTC(2024, 1, 29));
   });
 
-  it('throws on a forged brand (non YYYY-MM-DD shape)', () => {
-    expect(() => isoDateToUtcMs('garbage' as unknown as ReturnType<typeof parseIsoDate> & string)).toThrow(/IsoDate brand violated.*shape/);
+  it('throws on a forged brand — non YYYY-MM-DD shape', () => {
+    expect(() => isoDateToUtcMs('garbage' as unknown as ReturnType<typeof parseIsoDate> & string))
+      .toThrow(/IsoDate brand violated/);
   });
 
   it('throws on a forged brand that matches the regex but is not a valid calendar day', () => {
@@ -189,9 +190,9 @@ describe('isoDateToUtcMs', () => {
     // Date.UTC silently normalizes (Feb 30 → Mar 1) and downstream
     // arithmetic uses a wrong day.
     expect(() => isoDateToUtcMs('2024-02-30' as unknown as ReturnType<typeof parseIsoDate> & string))
-      .toThrow(/IsoDate brand violated.*calendar/);
+      .toThrow(/IsoDate brand violated/);
     expect(() => isoDateToUtcMs('2024-04-31' as unknown as ReturnType<typeof parseIsoDate> & string))
-      .toThrow(/IsoDate brand violated.*calendar/);
+      .toThrow(/IsoDate brand violated/);
   });
 });
 

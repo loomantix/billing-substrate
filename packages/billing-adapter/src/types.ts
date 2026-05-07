@@ -42,9 +42,16 @@ export type IsoDate = string & { readonly [isoDateBrand]: true };
 
 const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-/** Parse a `YYYY-MM-DD` string. Returns `null` on shape, range, or
- *  calendar-validity failure (e.g. `'2024-02-30'`). */
-export function parseIsoDate(value: string): IsoDate | null {
+/**
+ * Single-pass shape + range + calendar-round-trip validation. Returns
+ * the brand and the UTC-midnight ms together so callers needing both
+ * (e.g. validators doing date arithmetic) walk the parse exactly once.
+ * Not exported — `parseIsoDate` and `isoDateToUtcMs` are the public
+ * entry points; this helper is the shared implementation.
+ */
+function parseIsoDateInternal(
+  value: string,
+): { readonly branded: IsoDate; readonly utcMs: number } | null {
   const match = ISO_DATE_PATTERN.exec(value);
   if (!match) return null;
   const year = Number.parseInt(match[1] as string, 10);
@@ -60,7 +67,13 @@ export function parseIsoDate(value: string): IsoDate | null {
   ) {
     return null;
   }
-  return value as IsoDate;
+  return { branded: value as IsoDate, utcMs };
+}
+
+/** Parse a `YYYY-MM-DD` string. Returns `null` on shape, range, or
+ *  calendar-validity failure (e.g. `'2024-02-30'`). */
+export function parseIsoDate(value: string): IsoDate | null {
+  return parseIsoDateInternal(value)?.branded ?? null;
 }
 
 declare const batchItemIndexBrand: unique symbol;
@@ -78,28 +91,16 @@ export function asBatchItemIndex(n: number): BatchItemIndex | null {
 }
 
 export function isoDateToUtcMs(value: IsoDate): number {
-  // Re-validate shape AND calendar — a forged `as IsoDate` cast can
-  // ship a value like `'2024-02-30'` that matches the regex but is
-  // not a real calendar day. Without the round-trip check, Date.UTC
-  // silently normalizes (Feb 30 → Mar 1) and the brand's "calendar
-  // validity" guarantee evaporates.
-  const match = ISO_DATE_PATTERN.exec(value);
-  if (!match) {
-    throw new Error('IsoDate brand violated: not YYYY-MM-DD shape');
+  // Defense-in-depth: a forged `as IsoDate` cast can ship a
+  // shape-valid but calendar-invalid value (e.g. '2024-02-30').
+  // Without the round-trip check, Date.UTC silently normalizes
+  // (Feb 30 → Mar 1) and the brand's "calendar validity" guarantee
+  // evaporates.
+  const result = parseIsoDateInternal(value);
+  if (!result) {
+    throw new Error('IsoDate brand violated: not a valid YYYY-MM-DD calendar day');
   }
-  const year = Number.parseInt(match[1] as string, 10);
-  const month = Number.parseInt(match[2] as string, 10);
-  const day = Number.parseInt(match[3] as string, 10);
-  const utcMs = Date.UTC(year, month - 1, day);
-  const reconstructed = new Date(utcMs);
-  if (
-    reconstructed.getUTCFullYear() !== year ||
-    reconstructed.getUTCMonth() !== month - 1 ||
-    reconstructed.getUTCDate() !== day
-  ) {
-    throw new Error('IsoDate brand violated: not a valid calendar day');
-  }
-  return utcMs;
+  return result.utcMs;
 }
 
 /**
