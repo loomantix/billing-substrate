@@ -9,6 +9,7 @@
 
 import {
   AdapterErrorException,
+  asBatchItemIndex,
   canSubmit,
   type AdapterError,
   type ClaimBatch,
@@ -338,6 +339,39 @@ describe('translateRenderException — defense-in-depth contract translation', (
 
     const inspected = inspect(inner);
     expect(inspected).not.toContain('1980-04-19');
+  });
+
+  it('EncodeException.toJSON exposes name + message + kind + path positively (path is structural, never PHI)', () => {
+    // Pin the shape so a regression that drops `path` (which is needed
+    // for caller debugging) or accidentally adds `value` (which leaks)
+    // fails the test. The path field is always a field name like
+    // `items[0].patient.dateOfBirth` — structural, never PHI.
+    const inner = new EncodeException({
+      kind: 'field-too-long',
+      path: 'items[3].patient.healthNumber',
+      value: '12345678901',
+      width: 10,
+      message: 'value of length 11 exceeds field width 10',
+    });
+    expect(JSON.parse(JSON.stringify(inner))).toEqual({
+      name: 'EncodeException',
+      message: 'field-too-long: items[3].patient.healthNumber',
+      kind: 'field-too-long',
+      path: 'items[3].patient.healthNumber',
+    });
+  });
+
+  it('EmitException.toJSON exposes name + message + kind positively (no path field on EmitError union)', () => {
+    const inner = new EmitException({
+      kind: 'missing-item',
+      itemIndex: asBatchItemIndex(0)!,
+      message: 'items[0] is missing',
+    });
+    expect(JSON.parse(JSON.stringify(inner))).toEqual({
+      name: 'EmitException',
+      message: 'missing-item: items[0]',
+      kind: 'missing-item',
+    });
   });
 
   it('translates file-too-large with size context but no PHI', () => {

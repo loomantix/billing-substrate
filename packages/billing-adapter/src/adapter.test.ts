@@ -19,6 +19,7 @@ import type {
   ClaimRenderer,
   ClaimSubmitter,
   LineOutcome,
+  OpaqueAdapterState,
   PollOutcome,
   RenderedClaim,
   SubmitReceipt,
@@ -104,6 +105,22 @@ describe('JurisdictionAdapter contract', () => {
     expect(receipt.externalId).toBe('edt-resource-stub');
     const outcome = await adapter.poll(receipt, credentials);
     expect(outcome.kind).toBe('pending');
+  });
+
+  it('SubmitReceipt.opaqueState round-trips through JSON-clone untouched', () => {
+    // Pins the contract that consumers persist-and-forward `opaqueState`
+    // unchanged. A regression that drops the field on serialization or
+    // mutates it would silently break poll() for any adapter using a
+    // remittance cursor.
+    const original: SubmitReceipt = {
+      jurisdiction: 'ontario-mcedt',
+      externalId: 'edt-resource-stub',
+      submittedAt: '2026-05-02T00:00:00Z',
+      opaqueState: 'cursor:42|page:3|gen:abc123' as OpaqueAdapterState,
+    };
+    const cloned: SubmitReceipt = JSON.parse(JSON.stringify(original));
+    expect(cloned.opaqueState).toBe('cursor:42|page:3|gen:abc123');
+    expect(cloned).toEqual(original);
   });
 
   describe('canSubmit type guard', () => {
@@ -329,6 +346,22 @@ describe('JurisdictionAdapter contract', () => {
 
       const c3 = scrubCause({ name: 'X', message: 'y', status: 503 });
       expect(c3?.status).toBe(503);
+    });
+
+    it('coerces non-string name to "Error" and non-string message to "" (defensive type narrowing)', () => {
+      // A JS bypass / `as`-cast can pass an object whose name or message
+      // is the wrong runtime type. The factory must coerce rather than
+      // crash or echo. As long as either field has a usable string,
+      // the cause is kept (with the bad field defaulted).
+      const c = scrubCause({ name: 123, message: 'real error message' });
+      expect(c).toEqual({ name: 'Error', message: 'real error message' });
+
+      const c2 = scrubCause({ name: 'TypeError', message: { not: 'a string' } });
+      expect(c2).toEqual({ name: 'TypeError', message: '' });
+
+      // Both bad → returns null (no usable surface, drop the cause).
+      const c3 = scrubCause({ name: 42, message: { still: 'bad' } });
+      expect(c3).toBeNull();
     });
 
     it('omits Error.cause when the transport variant supplies no cause', () => {
