@@ -171,7 +171,7 @@ function safeError(error: AdapterError): AdapterError {
 }
 
 export class AdapterErrorException extends Error {
-  readonly error: AdapterError;
+  readonly error!: AdapterError;
 
   constructor(error: AdapterError) {
     const safe = safeError(error);
@@ -181,7 +181,17 @@ export class AdapterErrorException extends Error {
         : undefined;
     super(`${safe.kind}: ${describeAdapterError(safe)}`, options);
     this.name = 'AdapterErrorException';
-    this.error = safe;
+    // Non-enumerable so structured loggers that copy own enumerable
+    // properties (without honoring toJSON / util.inspect.custom)
+    // can't serialize the payload — `error.report.violations`,
+    // `error.cause`, etc. would otherwise leak even though the
+    // visible message is scrubbed.
+    Object.defineProperty(this, 'error', {
+      value: safe,
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    });
   }
 
   toJSON(): { readonly name: string; readonly message: string; readonly kind: AdapterError['kind'] } {

@@ -106,12 +106,22 @@ function buildEmitExceptionMessage(error: EmitError): string {
 }
 
 export class EmitException extends Error {
-  readonly error: EmitError;
+  readonly error!: EmitError;
 
   constructor(error: EmitError) {
     super(buildEmitExceptionMessage(error));
     this.name = 'EmitException';
-    this.error = error;
+    // Non-enumerable: defends against structured loggers that copy
+    // own enumerable properties without calling toJSON / inspect —
+    // `error.groupKey`, `error.firstValue`, `error.conflictingValue`
+    // (PHI for the inconsistent-group-field variant) would
+    // otherwise leak via the default own-property walk.
+    Object.defineProperty(this, 'error', {
+      value: error,
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    });
   }
 
   toJSON(): { readonly name: string; readonly message: string; readonly kind: EmitError['kind'] } {

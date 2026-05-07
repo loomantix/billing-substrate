@@ -30,7 +30,6 @@ import {
   ASCII_LOWERCASE_A,
   ASCII_LOWERCASE_Z,
   ASCII_SPACE,
-  ASCII_TILDE,
 } from './records/encoding.js';
 import { EncodeException, type EncodeError } from './records/errors.js';
 import {

@@ -325,6 +325,34 @@ describe('translateRenderException — defense-in-depth contract translation', (
     expect(inspected).not.toContain('HOSP');
   });
 
+  it('EmitException keeps `.error` non-enumerable to defend against own-enumerable-property serializers', () => {
+    const inner = new EmitException({
+      kind: 'inconsistent-group-field',
+      field: 'serviceLocation',
+      groupKey: '1234567890|1980-04-19|2026-04-19',
+      firstValue: 'HOSP',
+      conflictingValue: 'OFFC',
+      message: 'irrelevant',
+    });
+    expect(inner.error.kind).toBe('inconsistent-group-field');
+    expect(Object.keys(inner)).not.toContain('error');
+    expect(Object.getOwnPropertyDescriptor(inner, 'error')?.enumerable).toBe(false);
+    expect({ ...inner }).not.toHaveProperty('error');
+  });
+
+  it('EncodeException keeps `.error` non-enumerable to defend against own-enumerable-property serializers', () => {
+    const inner = new EncodeException({
+      kind: 'invalid-date',
+      path: 'items[0].patient.dateOfBirth',
+      value: '1980-04-19',
+      message: 'expected YYYY-MM-DD',
+    });
+    expect(inner.error.kind).toBe('invalid-date');
+    expect(Object.keys(inner)).not.toContain('error');
+    expect(Object.getOwnPropertyDescriptor(inner, 'error')?.enumerable).toBe(false);
+    expect({ ...inner }).not.toHaveProperty('error');
+  });
+
   it('EncodeException survives JSON.stringify and util.inspect without leaking the raw value', async () => {
     const { inspect } = await import('node:util');
     const inner = new EncodeException({

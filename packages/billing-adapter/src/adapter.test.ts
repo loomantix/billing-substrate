@@ -469,6 +469,21 @@ describe('JurisdictionAdapter contract', () => {
       });
     });
 
+    it('keeps `.error` non-enumerable so structured loggers walking own enumerable props cannot serialize the payload', () => {
+      // Defense-in-depth: toJSON / util.inspect.custom catch
+      // well-behaved serializers, but pino-style "copy own enumerable
+      // properties" pipelines bypass those hooks. Non-enumerable
+      // makes the payload invisible to that path too.
+      const e = new AdapterErrorException({
+        kind: 'validation',
+        report: { violations: [{ severity: 'error', code: 'leak-test', message: 'should not appear' }] },
+      });
+      expect(e.error.kind).toBe('validation');
+      expect(Object.keys(e)).not.toContain('error');
+      expect(Object.getOwnPropertyDescriptor(e, 'error')?.enumerable).toBe(false);
+      expect({ ...e }).not.toHaveProperty('error');
+    });
+
     it('throws and catches as Error (consumer ergonomics)', () => {
       const throwIt = () => {
         throw new AdapterErrorException({

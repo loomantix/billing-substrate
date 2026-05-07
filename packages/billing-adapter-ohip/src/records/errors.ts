@@ -83,12 +83,21 @@ function buildEncodeExceptionMessage(error: EncodeError): string {
 }
 
 export class EncodeException extends Error {
-  readonly error: EncodeError;
+  readonly error!: EncodeError;
 
   constructor(error: EncodeError) {
     super(buildEncodeExceptionMessage(error));
     this.name = 'EncodeException';
-    this.error = error;
+    // Non-enumerable: defends against structured loggers that copy
+    // own enumerable properties without calling toJSON / inspect —
+    // the raw `error.value` (PHI for HIN/DoB/name fields) would
+    // otherwise leak via the default own-property walk.
+    Object.defineProperty(this, 'error', {
+      value: error,
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    });
   }
 
   toJSON(): { readonly name: string; readonly message: string; readonly kind: EncodeError['kind']; readonly path: string } {

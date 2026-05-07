@@ -73,11 +73,16 @@ function encodePayee(payee: 'P' | 'S'): string {
   // Defense-in-depth for JS callers and `as` casts: a non-{P,S}
   // 1-byte char would silently ship in the wire record.
   if (payee !== 'P' && payee !== 'S') {
+    const stringified = String(payee);
+    // `''.charCodeAt(0)` is `NaN`, which would violate
+    // `InvalidCharacterClassError.badCharCode: number` and serialize
+    // as null. Fall back to -1 as the "no character to report" sentinel.
+    const code = stringified.length > 0 ? stringified.charCodeAt(0) : -1;
     const error: InvalidCharacterClassError = {
       kind: 'invalid-character-class',
       path: 'payee',
-      value: String(payee),
-      badCharCode: String(payee).charCodeAt(0),
+      value: stringified,
+      badCharCode: code,
       badCharIndex: 0,
       message: `payee must be 'P' or 'S'`,
     };
