@@ -18,13 +18,18 @@ name: Publish
 # Trusted Publisher must be configured per-package on npmjs.com, scoped
 # to this repo + workflow filename.
 #
-# Note: actions/setup-node is intentionally NOT given `registry-url` /
-# `scope`. Those inputs cause it to write `~/.npmrc` with a placeholder
-# `_authToken=${NODE_AUTH_TOKEN}` (literal string `XXXXX-XXXXX-...` when
-# no token is supplied). pnpm publish then sends that placeholder as a
-# bearer token, npm rejects it with 404, and the OIDC handshake never
-# fires. Each package's `publishConfig.registry` provides the correct
-# registry URL, so no `.npmrc` setup is required here.
+# Why this workflow uses `pnpm pack` + `npm publish` (not `pnpm publish`):
+# the OIDC token-exchange handshake against `/-/npm/v1/oidc/token/exchange`
+# is implemented in npm CLI ≥11.5.1. pnpm 10.29's publish path doesn't
+# perform that exchange — with no .npmrc auth it fails ENEEDAUTH; with
+# a placeholder .npmrc it fails 404. So we let pnpm produce the tarball
+# (it correctly rewrites `workspace:` protocol ranges to concrete versions
+# during pack) and let npm CLI do the actual upload + OIDC exchange.
+#
+# actions/setup-node is intentionally NOT given `registry-url` / `scope`
+# because those inputs write `~/.npmrc` with a placeholder
+# `_authToken=${NODE_AUTH_TOKEN}` that overrides OIDC. Each package's
+# `publishConfig.registry` already pins the registry URL.
 #
 # Provenance: `--provenance` produces an SLSA build attestation linking
 # the published tarball to this workflow run + the tag SHA. Verifiable
@@ -58,7 +63,18 @@ jobs:
       - run: pnpm -r --if-present run test
       - run: pnpm -r --if-present run build
 
-      # `--no-git-checks` is required because pnpm publish otherwise refuses
-      # to run from a detached tag checkout. CI history + the tag itself are
-      # the audit trail.
-      - run: pnpm -r publish --access public --provenance --no-git-checks
+      # Node 22's bundled npm is 10.x; OIDC token-exchange landed in 11.5.1.
+      - run: npm install -g npm@latest
+      - run: npm --version
+
+      - name: Publish @loomantix/billing-adapter
+        working-directory: packages/billing-adapter
+        run: |
+          pnpm pack --pack-destination ./pack
+          npm publish ./pack/*.tgz --access public --provenance
+
+      - name: Publish @loomantix/billing-adapter-ohip
+        working-directory: packages/billing-adapter-ohip
+        run: |
+          pnpm pack --pack-destination ./pack
+          npm publish ./pack/*.tgz --access public --provenance
