@@ -46,11 +46,13 @@
 
 import { createHash } from 'node:crypto';
 
-import type {
-  ClaimBatch,
-  ClaimItem,
-  PatientReference,
-  RenderedClaim,
+import {
+  asBatchItemIndex,
+  type BatchItemIndex,
+  type ClaimBatch,
+  type ClaimItem,
+  type PatientReference,
+  type RenderedClaim,
 } from '@loomantix/billing-adapter';
 
 import {
@@ -160,13 +162,25 @@ function patientGroupKey(item: ClaimItem): string | null {
   return `${item.patient.healthNumber}|${item.patient.dateOfBirth}|${item.serviceDate}`;
 }
 
+function brandedIndex(i: number): BatchItemIndex {
+  // `i` comes from a for-loop iterator over a non-negative-length array,
+  // so the brand always succeeds. Throw rather than returning `null` so
+  // a future regression that violates the invariant fails loud.
+  const branded = asBatchItemIndex(i);
+  if (branded === null) {
+    throw new Error(`internal: invalid item index ${i}`);
+  }
+  return branded;
+}
+
 function assertItemsPresent(items: readonly ClaimItem[]): void {
   for (let i = 0; i < items.length; i++) {
     if (!items[i]) {
+      const itemIndex = brandedIndex(i);
       throw new EmitException({
         kind: 'missing-item',
-        itemIndex: i,
-        message: missingItemMessage(i),
+        itemIndex,
+        message: missingItemMessage(itemIndex),
       });
     }
   }
@@ -176,11 +190,12 @@ function assertPatientFieldsPresent(items: readonly ClaimItem[]): void {
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     if (!item || !item.patient) continue;
+    const itemIndex = brandedIndex(i);
     if (item.patient.healthNumber === '') {
       throw new EmitException({
         kind: 'patient-missing-required-field',
         field: 'healthNumber',
-        itemIndex: i,
+        itemIndex,
         message: `items[${i}] carries a patient block with empty healthNumber; use no patient block for non-patient claims`,
       });
     }
@@ -188,7 +203,7 @@ function assertPatientFieldsPresent(items: readonly ClaimItem[]): void {
       throw new EmitException({
         kind: 'patient-missing-required-field',
         field: 'dateOfBirth',
-        itemIndex: i,
+        itemIndex,
         message: `items[${i}] carries a patient block with empty dateOfBirth`,
       });
     }

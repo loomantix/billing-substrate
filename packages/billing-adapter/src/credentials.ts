@@ -32,11 +32,21 @@ export class SubmitterCredentials {
 
   constructor(input: SubmitterCredentialsInput) {
     this.jurisdiction = input.jurisdiction;
-    // Copy Uint8Array bytes — `Readonly<>` only freezes the property
-    // reference, not the buffer contents.
+    // Snapshot binary values — `Readonly<>` only freezes the property
+    // reference, not the buffer contents. Buffer (Uint8Array subclass)
+    // is downgraded to plain Uint8Array; consumers needing Buffer
+    // methods on the way out should wrap the returned view themselves.
     const entries: Array<[string, string | Uint8Array]> = [];
     for (const [key, value] of Object.entries(input.material)) {
-      entries.push([key, value instanceof Uint8Array ? new Uint8Array(value) : value]);
+      if (typeof value === 'string') {
+        entries.push([key, value]);
+      } else if (value instanceof Uint8Array) {
+        entries.push([key, new Uint8Array(value)]);
+      } else {
+        throw new TypeError(
+          `SubmitterCredentials.material[${JSON.stringify(key)}] must be string or Uint8Array`,
+        );
+      }
     }
     this.#material = new Map(entries);
   }
@@ -44,7 +54,10 @@ export class SubmitterCredentials {
   /**
    * Retrieve a credential value by key, or `undefined` if absent.
    * `Uint8Array` values are returned as the live internal view so
-   * cipher operations can read them directly; callers MUST NOT mutate.
+   * cipher operations can read them directly; callers MUST NOT mutate
+   * AND MUST NOT interpolate the returned value into log/error
+   * strings — the redaction defenses on this class only protect the
+   * bag, not its emitted values.
    */
   get(key: string): string | Uint8Array | undefined {
     return this.#material.get(key);
@@ -56,7 +69,7 @@ export class SubmitterCredentials {
   }
 
   /** Snapshot of credential key names (values are not exposed). */
-  keys(): readonly string[] {
+  keys(): ReadonlyArray<string> {
     return Array.from(this.#material.keys());
   }
 

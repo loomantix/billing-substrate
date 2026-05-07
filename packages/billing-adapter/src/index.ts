@@ -34,17 +34,24 @@ export type {
   AdjudicationResult,
   LineOutcome,
   LineResult,
+  OpaqueAdapterState,
   PollOutcome,
   SubmitReceipt,
 } from './submission.js';
 
 // Errors
-export { AdapterErrorException, describeAdapterError } from './errors.js';
+export { AdapterErrorException, describeAdapterError, scrubCause } from './errors.js';
 export type { AdapterError, ScrubbedCause } from './errors.js';
 
 // Data shapes
-export { isBlockingFinding, isoDateToUtcMs, parseIsoDate } from './types.js';
+export {
+  asBatchItemIndex,
+  isBlockingFinding,
+  isoDateToUtcMs,
+  parseIsoDate,
+} from './types.js';
 export type {
+  BatchItemIndex,
   ClaimBatch,
   ClaimItem,
   IsoDate,

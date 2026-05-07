@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 
 import { canSubmit } from './adapter.js';
 import { SubmitterCredentials } from './credentials.js';
-import { AdapterErrorException, describeAdapterError } from './errors.js';
+import { AdapterErrorException, describeAdapterError, scrubCause } from './errors.js';
 import type {
   AdapterError,
   AdjudicationResult,
@@ -21,7 +21,6 @@ import type {
   LineOutcome,
   PollOutcome,
   RenderedClaim,
-  ScrubbedCause,
   SubmitReceipt,
   SubmitterIdentity,
   ValidationReport,
@@ -260,34 +259,37 @@ describe('JurisdictionAdapter contract', () => {
     });
 
     it('propagates a scrubbed transport cause into Error.cause for chained-exception logging', () => {
-      const scrubbed = {
+      const scrubbed = scrubCause({
         name: 'TransportError',
         message: 'EHOSTUNREACH',
         status: 503,
-      };
+      })!;
       const e = new AdapterErrorException({
         kind: 'transport',
         message: 'connection refused',
         cause: scrubbed,
       });
-      expect(e.cause).toEqual(scrubbed);
+      expect(e.cause).toEqual({
+        name: 'TransportError',
+        message: 'EHOSTUNREACH',
+        status: 503,
+      });
     });
 
-    it('runtime-narrows cause to {name, message, status?} even when caller bypasses the type via as-cast', () => {
+    it('runtime-rebuilds cause even when caller bypasses the brand via as-cast', () => {
       const dangerous = {
         name: 'AxiosError',
         message: 'Request failed with status code 401',
         status: 401,
-        // Hostile fields that must NOT reach Error.cause:
         config: { headers: { Authorization: 'Bearer SECRET-TOKEN' } },
         request: { _header: 'POST / HTTP/1.1\nAuthorization: Bearer SECRET' },
         stack: 'Error: ...\n  at /path/to/secret-file.ts:42',
-      } as unknown as ScrubbedCause;
+      };
 
       const e = new AdapterErrorException({
         kind: 'transport',
         message: 'auth failed',
-        cause: dangerous,
+        cause: dangerous as unknown as ReturnType<typeof scrubCause> & object,
       });
 
       expect(e.cause).toEqual({
@@ -295,13 +297,38 @@ describe('JurisdictionAdapter contract', () => {
         message: 'Request failed with status code 401',
         status: 401,
       });
-      // Pointer inequality proves the constructor copied rather than
-      // forwarded the live object.
       expect(e.cause).not.toBe(dangerous);
       const inspected = JSON.stringify(e.cause);
       expect(inspected).not.toContain('SECRET-TOKEN');
       expect(inspected).not.toContain('Authorization');
       expect(inspected).not.toContain('secret-file');
+    });
+
+    it('drops cause entirely when the input cannot be scrubbed (null / primitive / empty)', () => {
+      for (const dangerous of [null, undefined, 'string', 42, {}]) {
+        const e = new AdapterErrorException({
+          kind: 'transport',
+          message: 'unspec',
+          cause: dangerous as unknown as ReturnType<typeof scrubCause> & object,
+        });
+        expect(e.cause).toBeUndefined();
+        expect(e.error.kind).toBe('transport');
+        if (e.error.kind === 'transport') {
+          expect(e.error.cause).toBeUndefined();
+        }
+      }
+    });
+
+    it('rejects NaN/Infinity for status (uses Number.isFinite)', () => {
+      const c = scrubCause({ name: 'X', message: 'y', status: Number.NaN });
+      expect(c).not.toBeNull();
+      expect(c?.status).toBeUndefined();
+
+      const c2 = scrubCause({ name: 'X', message: 'y', status: Infinity });
+      expect(c2?.status).toBeUndefined();
+
+      const c3 = scrubCause({ name: 'X', message: 'y', status: 503 });
+      expect(c3?.status).toBe(503);
     });
 
     it('omits Error.cause when the transport variant supplies no cause', () => {
@@ -360,6 +387,7 @@ describe('JurisdictionAdapter contract', () => {
         const wrapped = { op: 'submit', creds };
         expect(JSON.stringify(wrapped)).not.toContain('SECRET-WRAPPED');
         expect(inspect(wrapped)).not.toContain('SECRET-WRAPPED');
+        expect(JSON.parse(JSON.stringify(wrapped)).creds.material).toBe('[redacted]');
       });
 
       it('exposes material only through the get accessor', () => {
@@ -370,9 +398,41 @@ describe('JurisdictionAdapter contract', () => {
         expect(creds.get('certificatePem')).toBe('value');
         expect(creds.get('missing')).toBeUndefined();
         expect(creds.has('certificatePem')).toBe(true);
-        // No `material` field on the surface — adapters cannot accidentally
-        // template-string the bag's contents into an error message.
+        expect(creds.has('missing')).toBe(false);
         expect((creds as unknown as { material?: unknown }).material).toBeUndefined();
+      });
+
+      it('exposes the key list without values', () => {
+        const creds = new SubmitterCredentials({
+          jurisdiction: 'ontario-mcedt',
+          material: { certificatePem: 'A', privateKeyPem: 'B' },
+        });
+        const keys = creds.keys();
+        expect([...keys].sort()).toEqual(['certificatePem', 'privateKeyPem']);
+      });
+
+      it('snapshots Uint8Array material on construction (caller mutation does not leak)', () => {
+        const original = new Uint8Array([1, 2, 3]);
+        const creds = new SubmitterCredentials({
+          jurisdiction: 'ontario-mcedt',
+          material: { signingKey: original },
+        });
+        original[0] = 0xff;
+        const stored = creds.get('signingKey');
+        expect(stored).toBeInstanceOf(Uint8Array);
+        expect((stored as Uint8Array)[0]).toBe(1);
+      });
+
+      it('rejects non-string non-Uint8Array material values at construction', () => {
+        expect(
+          () =>
+            new SubmitterCredentials({
+              jurisdiction: 'ontario-mcedt',
+              material: {
+                badShape: new ArrayBuffer(8) as unknown as Uint8Array,
+              },
+            }),
+        ).toThrow(TypeError);
       });
     });
 

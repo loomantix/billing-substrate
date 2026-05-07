@@ -7,6 +7,12 @@
 
 import { describe, expect, it } from 'vitest';
 
+import {
+  asBatchItemIndex,
+  isBlockingFinding,
+  isoDateToUtcMs,
+  parseIsoDate,
+} from './index.js';
 import type {
   ClaimBatch,
   ClaimItem,
@@ -106,5 +112,102 @@ describe('contract types', () => {
     const error: Severity = 'error';
     const warning: Severity = 'warning';
     expect([error, warning]).toEqual(['error', 'warning']);
+  });
+});
+
+describe('parseIsoDate', () => {
+  it('accepts a well-formed YYYY-MM-DD and returns the branded value', () => {
+    const result = parseIsoDate('2026-04-19');
+    expect(result).toBe('2026-04-19');
+  });
+
+  it('accepts the leap-day 2024-02-29', () => {
+    expect(parseIsoDate('2024-02-29')).toBe('2024-02-29');
+  });
+
+  it('rejects Feb 30 via calendar round-trip', () => {
+    expect(parseIsoDate('2024-02-30')).toBeNull();
+  });
+
+  it('rejects Apr 31 via calendar round-trip', () => {
+    expect(parseIsoDate('2024-04-31')).toBeNull();
+  });
+
+  it('rejects month=13 / month=00', () => {
+    expect(parseIsoDate('2024-13-01')).toBeNull();
+    expect(parseIsoDate('2024-00-15')).toBeNull();
+  });
+
+  it('rejects day=00 / day=32', () => {
+    expect(parseIsoDate('2024-04-00')).toBeNull();
+    expect(parseIsoDate('2024-04-32')).toBeNull();
+  });
+
+  it('rejects non-zero-padded components', () => {
+    expect(parseIsoDate('2024-4-19')).toBeNull();
+    expect(parseIsoDate('2024-04-9')).toBeNull();
+  });
+
+  it('rejects datetime / extra characters / leading whitespace', () => {
+    expect(parseIsoDate('2024-04-19T00:00:00Z')).toBeNull();
+    expect(parseIsoDate(' 2024-04-19')).toBeNull();
+    expect(parseIsoDate('2024-04-19 ')).toBeNull();
+  });
+
+  it('rejects empty string', () => {
+    expect(parseIsoDate('')).toBeNull();
+  });
+
+  it('rejects non-leap-year Feb 29', () => {
+    expect(parseIsoDate('2023-02-29')).toBeNull();
+  });
+});
+
+describe('isoDateToUtcMs', () => {
+  it('round-trips epoch zero (1970-01-01) → 0', () => {
+    const date = parseIsoDate('1970-01-01')!;
+    expect(isoDateToUtcMs(date)).toBe(0);
+  });
+
+  it('produces UTC midnight (no local-tz drift)', () => {
+    const date = parseIsoDate('2026-05-06')!;
+    expect(isoDateToUtcMs(date)).toBe(Date.UTC(2026, 4, 6));
+  });
+
+  it('handles leap day 2024-02-29 correctly', () => {
+    const date = parseIsoDate('2024-02-29')!;
+    expect(isoDateToUtcMs(date)).toBe(Date.UTC(2024, 1, 29));
+  });
+
+  it('throws on a forged brand (non YYYY-MM-DD shape)', () => {
+    expect(() => isoDateToUtcMs('garbage' as unknown as ReturnType<typeof parseIsoDate> & string)).toThrow(/IsoDate brand violated/);
+  });
+});
+
+describe('isBlockingFinding', () => {
+  it('blocks errors', () => {
+    expect(isBlockingFinding('error')).toBe(true);
+  });
+
+  it('does not block warnings', () => {
+    expect(isBlockingFinding('warning')).toBe(false);
+  });
+
+  it('throws on a future severity bypassed via cast (fail-loud, not silent return)', () => {
+    expect(() => isBlockingFinding('info' as Severity)).toThrow(/unhandled Severity/);
+  });
+});
+
+describe('asBatchItemIndex', () => {
+  it('brands non-negative integers', () => {
+    expect(asBatchItemIndex(0)).toBe(0);
+    expect(asBatchItemIndex(42)).toBe(42);
+  });
+
+  it('rejects negatives, NaN, Infinity, floats', () => {
+    expect(asBatchItemIndex(-1)).toBeNull();
+    expect(asBatchItemIndex(Number.NaN)).toBeNull();
+    expect(asBatchItemIndex(Infinity)).toBeNull();
+    expect(asBatchItemIndex(1.5)).toBeNull();
   });
 });

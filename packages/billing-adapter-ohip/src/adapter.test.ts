@@ -304,6 +304,42 @@ describe('translateRenderException — defense-in-depth contract translation', (
     expect(inner.message).toContain('inconsistent-group-field');
   });
 
+  it('EmitException survives JSON.stringify and util.inspect without leaking the structured payload', async () => {
+    const { inspect } = await import('node:util');
+    const inner = new EmitException({
+      kind: 'inconsistent-group-field',
+      field: 'serviceLocation',
+      groupKey: '1234567890|1980-04-19|2026-04-19',
+      firstValue: 'HOSP',
+      conflictingValue: 'OFFC',
+      message: 'should not appear',
+    });
+    const json = JSON.stringify(inner);
+    expect(json).not.toContain('1234567890');
+    expect(json).not.toContain('groupKey');
+    expect(json).not.toContain('HOSP');
+
+    const inspected = inspect(inner);
+    expect(inspected).not.toContain('1234567890');
+    expect(inspected).not.toContain('HOSP');
+  });
+
+  it('EncodeException survives JSON.stringify and util.inspect without leaking the raw value', async () => {
+    const { inspect } = await import('node:util');
+    const inner = new EncodeException({
+      kind: 'invalid-date',
+      path: 'items[0].patient.dateOfBirth',
+      value: '1980-04-19',
+      message: 'expected YYYY-MM-DD, got "1980-04-19"',
+    });
+    const json = JSON.stringify(inner);
+    expect(json).not.toContain('1980-04-19');
+    expect(json).not.toContain('expected YYYY-MM-DD');
+
+    const inspected = inspect(inner);
+    expect(inspected).not.toContain('1980-04-19');
+  });
+
   it('translates file-too-large with size context but no PHI', () => {
     const inner = new EmitException({
       kind: 'file-too-large',
@@ -386,6 +422,22 @@ describe('translateRenderException — defense-in-depth contract translation', (
     expect(v.path).toBe('items[0].patient.healthNumber');
     expect(v.message).not.toContain('12345678901');
     expect(v.message).toContain('width 10');
+  });
+
+  it('sanitizes EncodeException invalid-numeric — does NOT echo the raw value', () => {
+    const inner = new EncodeException({
+      kind: 'invalid-numeric',
+      path: 'items[0].patient.healthNumber',
+      value: '12345abc90',
+      message: 'non-digit character at index 5',
+    });
+    const result = translateRenderException(inner);
+    expect(result.kind).toBe('validation');
+    if (result.kind !== 'validation') return;
+    const v = result.report.violations[0]!;
+    expect(v.code).toBe('invalid-numeric');
+    expect(v.message).not.toContain('12345abc90');
+    expect(v.message).not.toContain('abc');
   });
 
   it('sanitizes EncodeException invalid-character-class — does NOT echo the raw value (PHI: HIN, name)', () => {

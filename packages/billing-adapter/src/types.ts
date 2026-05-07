@@ -27,7 +27,9 @@
 export type Jurisdiction =
   | 'ontario-mcedt'
   // Future: 'bc-msp', 'us-x12-837', 'de-kbv', 'fr-fse', 'za-medical-schemes', etc.
-  | (string & { readonly __jurisdictionBrand?: never });
+  // The `& {}` preserves literal autocomplete in TS without misleadingly
+  // suggesting the type is branded — any string is assignable.
+  | (string & {});
 
 declare const isoDateBrand: unique symbol;
 
@@ -40,6 +42,8 @@ export type IsoDate = string & { readonly [isoDateBrand]: true };
 
 const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 
+/** Parse a `YYYY-MM-DD` string. Returns `null` on shape, range, or
+ *  calendar-validity failure (e.g. `'2024-02-30'`). */
 export function parseIsoDate(value: string): IsoDate | null {
   const match = ISO_DATE_PATTERN.exec(value);
   if (!match) return null;
@@ -59,8 +63,25 @@ export function parseIsoDate(value: string): IsoDate | null {
   return value as IsoDate;
 }
 
+declare const batchItemIndexBrand: unique symbol;
+
+/**
+ * A non-negative integer index into `ClaimBatch.items`. Used by
+ * `LineResult` and adapter-internal error types to refer to a specific
+ * caller-supplied item without admitting `NaN`, negatives, or floats.
+ */
+export type BatchItemIndex = number & { readonly [batchItemIndexBrand]: true };
+
+/** Brand a number as a {@link BatchItemIndex}, or `null` if invalid. */
+export function asBatchItemIndex(n: number): BatchItemIndex | null {
+  return Number.isInteger(n) && n >= 0 ? (n as BatchItemIndex) : null;
+}
+
 export function isoDateToUtcMs(value: IsoDate): number {
-  const match = ISO_DATE_PATTERN.exec(value) as RegExpExecArray;
+  const match = ISO_DATE_PATTERN.exec(value);
+  if (!match) {
+    throw new Error('IsoDate brand violated: not YYYY-MM-DD shape');
+  }
   return Date.UTC(
     Number.parseInt(match[1] as string, 10),
     Number.parseInt(match[2] as string, 10) - 1,
@@ -177,10 +198,8 @@ export function isBlockingFinding(severity: Severity): boolean {
       return true;
     case 'warning':
       return false;
-    default: {
-      const exhaustive: never = severity;
-      return exhaustive;
-    }
+    default:
+      throw new Error(`unhandled Severity: ${String(severity)}`);
   }
 }
 

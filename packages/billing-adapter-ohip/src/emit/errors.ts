@@ -9,6 +9,8 @@
  * value).
  */
 
+import type { BatchItemIndex } from '@loomantix/billing-adapter';
+
 interface EmitErrorBase {
   readonly message: string;
 }
@@ -49,7 +51,7 @@ export interface InconsistentGroupFieldError extends EmitErrorBase {
 export interface PatientMissingRequiredFieldError extends EmitErrorBase {
   readonly kind: 'patient-missing-required-field';
   readonly field: 'healthNumber' | 'dateOfBirth';
-  readonly itemIndex: number;
+  readonly itemIndex: BatchItemIndex;
 }
 
 /**
@@ -62,11 +64,11 @@ export interface PatientMissingRequiredFieldError extends EmitErrorBase {
  */
 export interface MissingItemError extends EmitErrorBase {
   readonly kind: 'missing-item';
-  readonly itemIndex: number;
+  readonly itemIndex: BatchItemIndex;
 }
 
 /** Shared between the validator finding and the emit-layer exception. */
-export function missingItemMessage(itemIndex: number): string {
+export function missingItemMessage(itemIndex: BatchItemIndex | number): string {
   return `items[${itemIndex}] is missing (null, undefined, or sparse-array hole)`;
 }
 
@@ -96,10 +98,8 @@ function buildEmitExceptionMessage(error: EmitError): string {
       return `patient-missing-required-field: items[${error.itemIndex}].${error.field}`;
     case 'missing-item':
       return `missing-item: items[${error.itemIndex}]`;
-    default: {
-      const exhaustive: never = error;
-      return exhaustive;
-    }
+    default:
+      throw new Error(`unhandled EmitError variant: ${(error as { kind?: unknown }).kind}`);
   }
 }
 
@@ -110,5 +110,13 @@ export class EmitException extends Error {
     super(buildEmitExceptionMessage(error));
     this.name = 'EmitException';
     this.error = error;
+  }
+
+  toJSON(): { readonly name: string; readonly message: string; readonly kind: EmitError['kind'] } {
+    return { name: this.name, message: this.message, kind: this.error.kind };
+  }
+
+  [Symbol.for('nodejs.util.inspect.custom')](): string {
+    return `${this.name}: ${this.message}`;
   }
 }

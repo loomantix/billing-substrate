@@ -165,10 +165,8 @@ function describeEmitError(error: EmitError): string {
       return `items[${error.itemIndex}] has a patient block with empty ${error.field}`;
     case 'missing-item':
       return missingItemMessage(error.itemIndex);
-    default: {
-      const exhaustive: never = error;
-      return exhaustive;
-    }
+    default:
+      throw new Error(`unhandled EmitError variant: ${(error as { kind?: unknown }).kind}`);
   }
 }
 
@@ -205,10 +203,8 @@ function describeEncodeError(error: EncodeError): string {
       return 'value contains non-numeric content';
     case 'invalid-date':
       return 'value is not a valid YYYY-MM-DD date';
-    default: {
-      const exhaustive: never = error;
-      return exhaustive;
-    }
+    default:
+      throw new Error(`unhandled EncodeError variant: ${(error as { kind?: unknown }).kind}`);
   }
 }
 

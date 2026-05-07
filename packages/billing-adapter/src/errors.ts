@@ -19,16 +19,40 @@
 
 import type { ValidationReport } from './types.js';
 
+declare const scrubbedCauseBrand: unique symbol;
+
 /**
  * Sanitized cause attached to a `transport`-variant `AdapterError`.
- * Adapters MUST copy only these fields from the underlying failure;
- * a raw `fetch`/TLS error would propagate request headers, bodies,
- * and stack frames into consumer log shipping via `Error.cause`.
+ * The brand is constructed only by {@link scrubCause} — the raw
+ * exception cannot satisfy it structurally, even via spread or
+ * `Object.assign`, so a fetch/TLS error carrying request headers,
+ * bodies, or stack frames cannot reach `Error.cause` accidentally.
  */
 export interface ScrubbedCause {
   readonly name: string;
   readonly message: string;
   readonly status?: number;
+  readonly [scrubbedCauseBrand]: true;
+}
+
+/**
+ * Construct a {@link ScrubbedCause} from arbitrary input. The only
+ * legitimate constructor — adapters MUST route raw `fetch`/TLS
+ * failures through this. Returns the brand on success, `null` if
+ * input has no usable surface (e.g. `null`, primitive, or an object
+ * with neither `name` nor `message`).
+ */
+export function scrubCause(input: unknown): ScrubbedCause | null {
+  if (input === null || typeof input !== 'object') return null;
+  const src = input as { name?: unknown; message?: unknown; status?: unknown };
+  const name = typeof src.name === 'string' ? src.name : 'Error';
+  const message = typeof src.message === 'string' ? src.message : '';
+  if (name === 'Error' && message === '') return null;
+  const out: { name: string; message: string; status?: number } = { name, message };
+  if (typeof src.status === 'number' && Number.isFinite(src.status)) {
+    out.status = src.status;
+  }
+  return out as ScrubbedCause;
 }
 
 export type AdapterError =
@@ -77,8 +101,8 @@ export type AdapterError =
  * Adapters MUST scrub PHI from any string they surface through
  * `AdapterError.message` / `ValidationViolation.message` *before* the
  * payload reaches this helper. This helper just formats; it does not
- * sanitize. (See `describeEmitError` in `@loomantix/billing-adapter-ohip`
- * for the OHIP-side scrubbing pattern.)
+ * sanitize. (See `describeEmitError` / `describeEncodeError` in
+ * `@loomantix/billing-adapter-ohip` for the OHIP-side scrubbing pattern.)
  */
 export function describeAdapterError(error: AdapterError): string {
   switch (error.kind) {
@@ -102,22 +126,9 @@ export function describeAdapterError(error: AdapterError): string {
       return `after ${error.afterMs} ms`;
     case 'not-supported':
       return error.operation;
-    default: {
-      const exhaustive: never = error;
-      return exhaustive;
-    }
+    default:
+      throw new Error(`unhandled AdapterError variant: ${(error as { kind?: unknown }).kind}`);
   }
-}
-
-function narrowScrubbedCause(cause: ScrubbedCause): ScrubbedCause {
-  const narrowed: { name: string; message: string; status?: number } = {
-    name: typeof cause.name === 'string' ? cause.name : 'Error',
-    message: typeof cause.message === 'string' ? cause.message : '',
-  };
-  if (typeof cause.status === 'number') {
-    narrowed.status = cause.status;
-  }
-  return narrowed;
 }
 
 /**
@@ -146,19 +157,36 @@ function narrowScrubbedCause(cause: ScrubbedCause): ScrubbedCause {
  * }
  * ```
  */
+function safeError(error: AdapterError): AdapterError {
+  // Re-scrub `cause` defensively. The compile-time `ScrubbedCause`
+  // brand is the first line; `scrubCause` runtime-rebuilds the value
+  // so a forged `as`-cast can't carry hostile fields onto `this.error`.
+  if (error.kind !== 'transport' || error.cause === undefined) return error;
+  const rescrubbed = scrubCause(error.cause);
+  return rescrubbed === null
+    ? { kind: 'transport', message: error.message }
+    : { kind: 'transport', message: error.message, cause: rescrubbed };
+}
+
 export class AdapterErrorException extends Error {
   readonly error: AdapterError;
 
   constructor(error: AdapterError) {
-    // Runtime-narrow the cause so an `as`-cast or JS-bypass caller can't
-    // attach a raw fetch/TLS error whose headers, bodies, or stack
-    // would leak through default cause-chain serialization.
+    const safe = safeError(error);
     const options =
-      error.kind === 'transport' && error.cause !== undefined
-        ? { cause: narrowScrubbedCause(error.cause) }
+      safe.kind === 'transport' && safe.cause !== undefined
+        ? { cause: safe.cause }
         : undefined;
-    super(`${error.kind}: ${describeAdapterError(error)}`, options);
+    super(`${safe.kind}: ${describeAdapterError(safe)}`, options);
     this.name = 'AdapterErrorException';
-    this.error = error;
+    this.error = safe;
+  }
+
+  toJSON(): { readonly name: string; readonly message: string; readonly kind: AdapterError['kind'] } {
+    return { name: this.name, message: this.message, kind: this.error.kind };
+  }
+
+  [Symbol.for('nodejs.util.inspect.custom')](): string {
+    return `${this.name}: ${this.message}`;
   }
 }
