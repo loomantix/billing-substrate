@@ -20,10 +20,10 @@ import {
   type InvalidNumericError,
 } from './errors.js';
 
-const ASCII_SPACE = 0x20;
-const ASCII_TILDE = 0x7e;
-const ASCII_LOWERCASE_A = 0x61;
-const ASCII_LOWERCASE_Z = 0x7a;
+export const ASCII_SPACE = 0x20;
+export const ASCII_TILDE = 0x7e;
+export const ASCII_LOWERCASE_A = 0x61;
+export const ASCII_LOWERCASE_Z = 0x7a;
 const ASCII_DIGIT_0 = 0x30;
 const ASCII_DIGIT_9 = 0x39;
 

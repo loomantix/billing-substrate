@@ -273,9 +273,6 @@ describe('emitClaimFile — error handling', () => {
   });
 
   it('rejects a sparse-array hole in items with missing-item rather than silently dropping', async () => {
-    // Defends against the silent-skip pattern that previously lived
-    // in groupClaimEnvelopes and assertPatientFieldsPresent. Dropping
-    // a hole would break LineResult.itemIndex correlation downstream.
     const items: ClaimItem[] = [
       q310Item('2026-04-19', 4),
       undefined as unknown as ClaimItem,

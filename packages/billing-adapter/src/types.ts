@@ -33,28 +33,13 @@ declare const isoDateBrand: unique symbol;
 
 /**
  * An ISO 8601 calendar date in `YYYY-MM-DD` form. The brand certifies
- * three things at compile time:
- *
- * 1. Shape: matches `^\d{4}-\d{2}-\d{2}$`.
- * 2. Component plausibility: month in `[1, 12]`, day in `[1, 31]`.
- * 3. Calendar validity: month/day combination exists (no Feb 30, no
- *    Apr 31). Reconstructed via `Date.UTC` round-trip.
- *
- * Construct with {@link parseIsoDate}. Use a non-null assertion in
- * test fixtures where the literal is known-valid; in production, route
- * untrusted input through `parseIsoDate` and surface the `null` case
- * as a validation finding.
+ * shape, component-range, and calendar validity (no Feb 30) — all
+ * verified by {@link parseIsoDate}, the only legitimate constructor.
  */
 export type IsoDate = string & { readonly [isoDateBrand]: true };
 
 const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-/**
- * Parse a `YYYY-MM-DD` string into a branded {@link IsoDate}. Returns
- * `null` for any input that fails shape, component-range, or
- * calendar-validity checks. A successful parse is the only way to
- * construct an `IsoDate` value.
- */
 export function parseIsoDate(value: string): IsoDate | null {
   const match = ISO_DATE_PATTERN.exec(value);
   if (!match) return null;
@@ -74,10 +59,6 @@ export function parseIsoDate(value: string): IsoDate | null {
   return value as IsoDate;
 }
 
-/**
- * Convert an {@link IsoDate} to its UTC-midnight epoch milliseconds.
- * Trusted by the brand: no re-validation needed at the call site.
- */
 export function isoDateToUtcMs(value: IsoDate): number {
   const match = ISO_DATE_PATTERN.exec(value) as RegExpExecArray;
   return Date.UTC(
@@ -187,11 +168,8 @@ export type Severity = 'error' | 'warning';
 
 /**
  * True when a finding at this severity blocks `render` / `submit`.
- * Implemented as an exhaustive switch so any future {@link Severity}
- * addition is a build error rather than a silent posture regression
- * (a positive `=== 'error'` predicate would fail open on a new
- * blocking-severity addition; a negative `!== 'warning'` would fail
- * closed but would also block any new informational severity).
+ * Exhaustive switch so any future {@link Severity} addition is a
+ * build error rather than a silent posture regression.
  */
 export function isBlockingFinding(severity: Severity): boolean {
   switch (severity) {
@@ -199,6 +177,10 @@ export function isBlockingFinding(severity: Severity): boolean {
       return true;
     case 'warning':
       return false;
+    default: {
+      const exhaustive: never = severity;
+      return exhaustive;
+    }
   }
 }
 

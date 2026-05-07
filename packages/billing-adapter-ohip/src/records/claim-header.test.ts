@@ -96,7 +96,6 @@ describe('encodeClaimHeader', () => {
     }
   });
 
-
   it('rejects payProgram with wrong width', () => {
     expect(() =>
       encodeClaimHeader({ ...patientLinked, payProgram: 'HC' }),

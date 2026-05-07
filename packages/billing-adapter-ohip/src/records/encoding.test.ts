@@ -51,11 +51,8 @@ describe('assertAsciiUpper', () => {
   });
 
   it('rejects a surrogate pair (emoji, non-BMP) with invalid-character-class', () => {
-    // A non-BMP character (e.g. emoji) is a UTF-16 surrogate pair —
-    // each half has code point 0xD800-0xDFFF, well outside printable
-    // ASCII. Without this defense the encoder would silently produce
-    // record bytes that mis-correlate `string.length` (code units) with
-    // byte width. Pin the throw so a future "tolerate" change fails closed.
+    // Surrogate halves (0xD800-0xDFFF) are outside printable ASCII;
+    // without this throw, code-unit length mis-correlates with byte width.
     try {
       assertAsciiUpper('A\u{1F600}', 'x');
       throw new Error('should have thrown');

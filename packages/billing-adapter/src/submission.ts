@@ -25,18 +25,10 @@ export interface SubmitReceipt {
   /** ISO 8601 UTC timestamp of jurisdictional acceptance. */
   readonly submittedAt: string;
   /**
-   * Adapter-internal opaque state needed to resume `poll` across
-   * invocations. The contract requires adapters to be stateless across
-   * invocations (obligation 6) — anything the adapter needs at poll
-   * time that isn't `externalId` lives here. Examples: pagination
-   * cursors for jurisdictions whose remittance API is paged, generation
-   * tokens for jurisdictions that issue transient retrieval tickets.
-   *
-   * Consumers MUST treat this field as opaque: persist it alongside
-   * the receipt, pass it through unchanged, and never inspect or log
-   * its content. Adapters MUST NOT encode credentials or PHI here —
-   * the field crosses the consumer's persistence boundary like the
-   * receipt itself.
+   * Adapter-internal opaque state needed by `poll` (e.g. remittance
+   * pagination cursor). Consumers persist and forward it unchanged.
+   * Adapters MUST NOT encode credentials or PHI here — it crosses
+   * the consumer's persistence boundary like the rest of the receipt.
    */
   readonly opaqueState?: string;
 }

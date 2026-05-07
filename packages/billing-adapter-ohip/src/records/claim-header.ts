@@ -70,10 +70,8 @@ export interface ClaimHeaderInput {
 const HEH_LENGTH = 79;
 
 function encodePayee(payee: 'P' | 'S'): string {
-  // Defense-in-depth for JS callers and `as` casts: TypeScript's `'P' | 'S'`
-  // narrowing is gone at runtime, and any non-{P,S} character that's still
-  // 1 byte (e.g. `'X'`) would silently produce a 79-char record where the
-  // payee position carries garbage — `record.length` invariant wouldn't fire.
+  // Defense-in-depth for JS callers and `as` casts: a non-{P,S}
+  // 1-byte char would silently ship in the wire record.
   if (payee !== 'P' && payee !== 'S') {
     const error: InvalidCharacterClassError = {
       kind: 'invalid-character-class',

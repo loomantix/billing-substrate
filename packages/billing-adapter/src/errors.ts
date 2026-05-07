@@ -20,21 +20,10 @@
 import type { ValidationReport } from './types.js';
 
 /**
- * Sanitized cause information attached to a `transport`-variant
- * `AdapterError`. The contract requires adapters to scrub raw exception
- * objects before surfacing them: a raw `fetch` failure or TLS error
- * carries request headers (Authorization, mTLS material), request
- * bodies (PHI from the rendered claim), or response payloads — all of
- * which `Error.cause` would propagate to consumer loggers (Sentry,
- * OpenTelemetry, pino) by default.
- *
- * Adapters MUST construct this shape from the underlying failure
- * deliberately, copying only the fields listed below. `name` and
- * `message` are required; `status` is optional for HTTP-style failures.
- *
- * If you need richer context for server-side debugging, log it
- * separately (with appropriate scrubbing) — do not stuff it into the
- * surfaced cause.
+ * Sanitized cause attached to a `transport`-variant `AdapterError`.
+ * Adapters MUST copy only these fields from the underlying failure;
+ * a raw `fetch`/TLS error would propagate request headers, bodies,
+ * and stack frames into consumer log shipping via `Error.cause`.
  */
 export interface ScrubbedCause {
   readonly name: string;
@@ -161,13 +150,9 @@ export class AdapterErrorException extends Error {
   readonly error: AdapterError;
 
   constructor(error: AdapterError) {
-    // Propagate a narrowed copy of the underlying cause into
-    // `Error.cause` so structured loggers (util.inspect, Sentry, OTel)
-    // render the chain. The compile-time `ScrubbedCause` type narrows
-    // adapters' input; this runtime copy defends against `as` casts
-    // and JS-bypass callers that satisfy the type structurally with a
-    // raw fetch error / Response / TLS failure carrying credentials
-    // or PHI in `.config`, `.request.headers`, `.stack`, etc.
+    // Runtime-narrow the cause so an `as`-cast or JS-bypass caller can't
+    // attach a raw fetch/TLS error whose headers, bodies, or stack
+    // would leak through default cause-chain serialization.
     const options =
       error.kind === 'transport' && error.cause !== undefined
         ? { cause: narrowScrubbedCause(error.cause) }

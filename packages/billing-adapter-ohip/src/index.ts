@@ -16,7 +16,6 @@ import {
   type AdapterError,
   type ClaimBatch,
   type ClaimRenderer,
-  type Jurisdiction,
   type RenderedClaim,
   type ValidationReport,
   type ValidationViolation,
@@ -27,6 +26,12 @@ import {
   type OntarioMcedtConfig,
 } from './emit/emit-claim-file.js';
 import { EmitException, missingItemMessage, type EmitError } from './emit/errors.js';
+import {
+  ASCII_LOWERCASE_A,
+  ASCII_LOWERCASE_Z,
+  ASCII_SPACE,
+  ASCII_TILDE,
+} from './records/encoding.js';
 import { EncodeException, type EncodeError } from './records/errors.js';
 import {
   validateBatch,
@@ -85,7 +90,7 @@ export interface OntarioMcedtAdapterOptions {
  * only at this phase. `canSubmit(adapter)` returns `false`.
  */
 export class OntarioMcedtAdapter implements ClaimRenderer {
-  readonly jurisdiction = 'ontario-mcedt' as const satisfies Jurisdiction;
+  readonly jurisdiction = 'ontario-mcedt' as const;
 
   private readonly config: OntarioMcedtConfig;
   private readonly validationOptions: ValidateBatchOptions;
@@ -154,16 +159,16 @@ function describeEmitError(error: EmitError): string {
     case 'file-too-large':
       return `assembled file would exceed the MOH 10 MB limit (${error.fileSize} bytes > ${error.maxSize})`;
     case 'inconsistent-group-field':
-      // `firstValue`/`conflictingValue` for the `versionCode` variant
-      // are patient health-card revision codes (PHI-adjacent under
-      // HIPAA's broad identifier rule). Surface only the `field` name;
-      // the structured payload remains on the inner exception for
-      // in-package handlers.
+      // versionCode values are PHI-adjacent — surface only the field name.
       return `items in a single claim envelope disagree on ${error.field}`;
     case 'patient-missing-required-field':
       return `items[${error.itemIndex}] has a patient block with empty ${error.field}`;
     case 'missing-item':
       return missingItemMessage(error.itemIndex);
+    default: {
+      const exhaustive: never = error;
+      return exhaustive;
+    }
   }
 }
 
@@ -178,35 +183,20 @@ function pathForEmitError(error: EmitError): string | undefined {
 }
 
 /**
- * Sanitized human-readable summary of an `EncodeError`. PHI-scrubbing
- * happens here: the raw `EncodeError.value` is the field content that
- * failed encoding (a HIN, DoB, name, or other PHI-bearing value), and
- * the inner `EncodeError.message` interpolates that value for several
- * variants (e.g. `invalid-date`'s "expected YYYY-MM-DD, got <value>" and
- * `invalid-character-class`'s "lowercase character '<char>' at index N").
- *
- * The output of this function is what crosses the public adapter
- * boundary via `ValidationViolation.message`, so it MUST NOT echo
- * `value` or the inner free-text message. Only structural facts —
- * field path, error kind, widths, indices, char codes — are surfaced.
+ * PHI-scrubbed surface message for an `EncodeError`. The raw `value`
+ * and inner `message` carry PHI (a HIN/DoB/name); only structural
+ * facts cross the public boundary.
  */
+function classifyBadAsciiByte(code: number): 'lowercase' | 'non-printable' | 'non-ASCII' {
+  if (code >= ASCII_LOWERCASE_A && code <= ASCII_LOWERCASE_Z) return 'lowercase';
+  if (code < ASCII_SPACE || code > ASCII_TILDE) return 'non-printable';
+  return 'non-ASCII';
+}
+
 function describeEncodeError(error: EncodeError): string {
   switch (error.kind) {
-    case 'invalid-character-class': {
-      // Classify the bad byte without echoing its code. For name-class
-      // fields the byte itself is one PHI character; for HIN-class
-      // fields it's a digit but echoing classifies the leak shape.
-      // Surface the category — consumers narrow on `code`, not on
-      // hex digits in the message.
-      const code = error.badCharCode;
-      const klass =
-        code >= 0x61 && code <= 0x7a
-          ? 'lowercase'
-          : code < 0x20 || code === 0x7f
-            ? 'non-printable'
-            : 'non-ASCII';
-      return `${klass} character at index ${error.badCharIndex}`;
-    }
+    case 'invalid-character-class':
+      return `${classifyBadAsciiByte(error.badCharCode)} character at index ${error.badCharIndex}`;
     case 'field-too-long':
       return `value exceeds field width ${error.width}`;
     case 'field-wrong-width':
@@ -215,6 +205,10 @@ function describeEncodeError(error: EncodeError): string {
       return 'value contains non-numeric content';
     case 'invalid-date':
       return 'value is not a valid YYYY-MM-DD date';
+    default: {
+      const exhaustive: never = error;
+      return exhaustive;
+    }
   }
 }
 

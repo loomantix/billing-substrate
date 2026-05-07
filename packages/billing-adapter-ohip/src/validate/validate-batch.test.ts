@@ -493,10 +493,6 @@ describe('validateBatch — aggregation (contract obligation 1)', () => {
   });
 
   it('returns errors AND warnings in the same report — neither severity is dropped', () => {
-    // Defends against a future "cleanup" that filters warnings out when
-    // errors are present, or short-circuits warning collection on first
-    // error. A blocking error (Q310-with-no-suffix) and two warnings
-    // (unknown fee code, stale service date) must all surface.
     const mixed = batchOf([
       q310Item({ feeCode: 'Q310' }),               // error: fee-code format
       q310Item({ feeCode: 'Z999X' }),              // warning: unknown fee code
@@ -517,11 +513,6 @@ describe('validateBatch — aggregation (contract obligation 1)', () => {
   });
 
   it('records a missing-item violation rather than silently skipping a sparse-array hole', () => {
-    // TypeScript's `readonly ClaimItem[]` admits sparse arrays at
-    // runtime. Silently skipping a hole would drop a claim the caller
-    // submitted *and* misalign the LineResult.itemIndex mapping that
-    // poll uses. The validator surfaces it as a finding; the emit
-    // layer fails closed with the same code.
     const sparse: ClaimItem[] = [
       q310Item(),
       undefined as unknown as ClaimItem,
@@ -534,9 +525,6 @@ describe('validateBatch — aggregation (contract obligation 1)', () => {
   });
 
   it('checkAsciiUppercase aggregates every bad character (no per-field short-circuit)', () => {
-    // Field-level aggregation. A string with two lowercase characters
-    // must yield two findings, not one — the original implementation
-    // returned on the first.
     const report = validateBatch(
       batchOf([q310Item({ diagnosticCode: 'aBcD' })]),
       validConfig,

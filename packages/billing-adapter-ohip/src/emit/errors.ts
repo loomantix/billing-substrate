@@ -65,12 +65,7 @@ export interface MissingItemError extends EmitErrorBase {
   readonly itemIndex: number;
 }
 
-/**
- * Canonical human message for the `missing-item` finding, used by both
- * the validator (as a `ValidationViolation.message`) and the emit
- * layer (as the `MissingItemError.message`). Single source of truth so
- * the two can't drift.
- */
+/** Shared between the validator finding and the emit-layer exception. */
 export function missingItemMessage(itemIndex: number): string {
   return `items[${itemIndex}] is missing (null, undefined, or sparse-array hole)`;
 }
@@ -85,15 +80,9 @@ export type EmitError =
 export type EmitErrorKind = EmitError['kind'];
 
 /**
- * Build a PHI-free `Error.message` summary from the structured payload.
- * The `message` field on each `EmitError` variant CAN carry PHI (e.g.
- * the `inconsistent-group-field` variant interpolates `groupKey =
- * HIN|DoB|date`), so the exception's `.message` MUST NOT mirror it
- * directly — anything that catches and logs `e.message` (Sentry's
- * default fingerprint, `util.inspect`, `e.toString()`) leaks.
- *
- * The structured payload remains accessible via `.error` for
- * in-package handlers (e.g. `translateRenderException`).
+ * PHI-free `Error.message`. The `message` field on each variant can
+ * carry PHI (e.g. `inconsistent-group-field`'s `groupKey =
+ * HIN|DoB|date`); the structured payload stays accessible via `.error`.
  */
 function buildEmitExceptionMessage(error: EmitError): string {
   switch (error.kind) {
@@ -107,6 +96,10 @@ function buildEmitExceptionMessage(error: EmitError): string {
       return `patient-missing-required-field: items[${error.itemIndex}].${error.field}`;
     case 'missing-item':
       return `missing-item: items[${error.itemIndex}]`;
+    default: {
+      const exhaustive: never = error;
+      return exhaustive;
+    }
   }
 }
 

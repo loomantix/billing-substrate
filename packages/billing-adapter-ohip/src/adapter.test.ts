@@ -288,11 +288,6 @@ describe('translateRenderException — defense-in-depth contract translation', (
   });
 
   it('EmitException.message itself does NOT carry PHI — only the structured kind summary', () => {
-    // Defends against catch-and-log paths inside the package: if any
-    // future code reaches into `e.message` instead of `e.error`, the
-    // PHI-bearing groupKey must already be scrubbed at the
-    // Error-message level (super constructor), not just at
-    // translateRenderException's surface.
     const inner = new EmitException({
       kind: 'inconsistent-group-field',
       field: 'serviceLocation',
@@ -359,13 +354,6 @@ describe('translateRenderException — defense-in-depth contract translation', (
   });
 
   it('sanitizes EncodeException invalid-date — does NOT echo the raw value (PHI: dateOfBirth)', () => {
-    // EncodeError messages embed the raw field value for invalid-date
-    // ("expected YYYY-MM-DD, got <value>") and lowercase character class
-    // ("lowercase character '<char>' at index N"). For PHI-bearing fields
-    // (dateOfBirth, healthNumber) that value is patient PHI. The translated
-    // ValidationViolation.message crosses the public adapter boundary, so
-    // it MUST NOT contain the raw value. If a future change ever forwards
-    // cause.error.message verbatim again, this test fails closed.
     const inner = new EncodeException({
       kind: 'invalid-date',
       path: 'items[0].patient.dateOfBirth',

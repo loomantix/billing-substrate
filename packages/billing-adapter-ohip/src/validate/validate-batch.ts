@@ -22,6 +22,7 @@
  */
 
 import {
+  isoDateToUtcMs,
   parseIsoDate,
   type ClaimBatch,
   type ClaimItem,
@@ -217,52 +218,48 @@ function validateConfig(
   );
 }
 
-function isoDateToDate(value: string): Date | null {
-  // The contract type `IsoDate` certifies shape and calendar validity at
-  // compile time; this function still re-parses at runtime as
-  // defense-in-depth for callers that bypass the type system (JS, `as
-  // IsoDate` casts). A successful round-trip yields a Date for the
-  // window/staleness arithmetic; failure produces a finding.
+// Defense-in-depth for JS callers / `as IsoDate` casts: re-parse the
+// string and return UTC-midnight ms, or null if the brand was lying.
+function isoDateToMs(value: string): number | null {
   const branded = parseIsoDate(value);
-  if (!branded) return null;
-  return new Date(branded);
+  return branded === null ? null : isoDateToUtcMs(branded);
 }
 
-function daysBetween(earlier: Date, later: Date): number {
-  return Math.floor((later.getTime() - earlier.getTime()) / 86_400_000);
+function daysBetweenMs(earlierMs: number, laterMs: number): number {
+  return Math.floor((laterMs - earlierMs) / 86_400_000);
 }
 
 function validatePeriod(
   period: ServicePeriod,
-  now: Date,
+  nowMs: number,
   violations: ValidationViolation[],
-): { start: Date | null; end: Date | null } {
-  const start = isoDateToDate(period.start);
-  const end = isoDateToDate(period.end);
+): { startMs: number | null; endMs: number | null } {
+  const startMs = isoDateToMs(period.start);
+  const endMs = isoDateToMs(period.end);
 
-  if (!start) {
+  if (startMs === null) {
     pushError(violations, {
       code: 'invalid-service-period-start',
       message: `servicePeriod.start must be YYYY-MM-DD; got ${JSON.stringify(period.start)}`,
       path: 'servicePeriod.start',
     });
   }
-  if (!end) {
+  if (endMs === null) {
     pushError(violations, {
       code: 'invalid-service-period-end',
       message: `servicePeriod.end must be YYYY-MM-DD; got ${JSON.stringify(period.end)}`,
       path: 'servicePeriod.end',
     });
   }
-  if (start && end) {
-    if (start.getTime() > end.getTime()) {
+  if (startMs !== null && endMs !== null) {
+    if (startMs > endMs) {
       pushError(violations, {
         code: 'invalid-service-period-bounds',
         message: 'servicePeriod.start is after servicePeriod.end',
         path: 'servicePeriod',
       });
     }
-    const startInFutureDays = daysBetween(now, start);
+    const startInFutureDays = daysBetweenMs(nowMs, startMs);
     if (startInFutureDays > FUTURE_PERIOD_GRACE_DAYS) {
       pushWarning(violations, {
         code: 'service-period-future',
@@ -270,7 +267,7 @@ function validatePeriod(
         path: 'servicePeriod.start',
       });
     }
-    const endAgeDays = daysBetween(end, now);
+    const endAgeDays = daysBetweenMs(endMs, nowMs);
     if (endAgeDays > TOO_OLD_PERIOD_DAYS) {
       pushWarning(violations, {
         code: 'service-period-too-old',
@@ -280,7 +277,7 @@ function validatePeriod(
     }
   }
 
-  return { start, end };
+  return { startMs, endMs };
 }
 
 function validatePatient(
@@ -308,7 +305,7 @@ function validatePatient(
       message: `${itemPath}.patient.dateOfBirth is empty`,
       path: `${itemPath}.patient.dateOfBirth`,
     });
-  } else if (!isoDateToDate(patient.dateOfBirth)) {
+  } else if (parseIsoDate(patient.dateOfBirth) === null) {
     pushError(violations, {
       code: 'invalid-patient-date-of-birth',
       message: `${itemPath}.patient.dateOfBirth must be YYYY-MM-DD`,
@@ -337,8 +334,8 @@ function validatePatient(
 function validateItem(
   item: ClaimItem,
   index: number,
-  period: { start: Date | null; end: Date | null },
-  now: Date,
+  period: { startMs: number | null; endMs: number | null },
+  nowMs: number,
   violations: ValidationViolation[],
 ): void {
   const itemPath = `items[${index}]`;
@@ -388,29 +385,29 @@ function validateItem(
     });
   }
 
-  const serviceDate = isoDateToDate(item.serviceDate);
-  if (!serviceDate) {
+  const serviceDateMs = isoDateToMs(item.serviceDate);
+  if (serviceDateMs === null) {
     pushError(violations, {
       code: 'invalid-service-date',
       message: `${itemPath}.serviceDate must be YYYY-MM-DD; got ${JSON.stringify(item.serviceDate)}`,
       path: `${itemPath}.serviceDate`,
     });
   } else {
-    if (period.start && serviceDate.getTime() < period.start.getTime()) {
+    if (period.startMs !== null && serviceDateMs < period.startMs) {
       pushError(violations, {
         code: 'service-date-before-period',
         message: `${itemPath}.serviceDate is before servicePeriod.start`,
         path: `${itemPath}.serviceDate`,
       });
     }
-    if (period.end && serviceDate.getTime() > period.end.getTime()) {
+    if (period.endMs !== null && serviceDateMs > period.endMs) {
       pushError(violations, {
         code: 'service-date-after-period',
         message: `${itemPath}.serviceDate is after servicePeriod.end`,
         path: `${itemPath}.serviceDate`,
       });
     }
-    const ageDays = daysBetween(serviceDate, now);
+    const ageDays = daysBetweenMs(serviceDateMs, nowMs);
     if (ageDays > STALE_THRESHOLD_DAYS) {
       pushWarning(violations, {
         code: 'stale-service-date',
@@ -477,7 +474,7 @@ export function validateBatch(
   options: ValidateBatchOptions = {},
 ): ValidationReport {
   const violations: ValidationViolation[] = [];
-  const now = options.now ?? new Date();
+  const nowMs = (options.now ?? new Date()).getTime();
 
   validateConfig(config, violations);
 
@@ -488,7 +485,7 @@ export function validateBatch(
     });
   }
 
-  const period = validatePeriod(batch.servicePeriod, now, violations);
+  const period = validatePeriod(batch.servicePeriod, nowMs, violations);
 
   for (let i = 0; i < batch.items.length; i++) {
     const item = batch.items[i];
@@ -500,7 +497,7 @@ export function validateBatch(
       });
       continue;
     }
-    validateItem(item, i, period, now, violations);
+    validateItem(item, i, period, nowMs, violations);
   }
 
   return { violations };

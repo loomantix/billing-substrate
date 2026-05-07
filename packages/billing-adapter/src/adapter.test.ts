@@ -21,6 +21,7 @@ import type {
   LineOutcome,
   PollOutcome,
   RenderedClaim,
+  ScrubbedCause,
   SubmitReceipt,
   SubmitterIdentity,
   ValidationReport,
@@ -259,11 +260,6 @@ describe('JurisdictionAdapter contract', () => {
     });
 
     it('propagates a scrubbed transport cause into Error.cause for chained-exception logging', () => {
-      // The contract types `cause` as `ScrubbedCause` ({ name, message,
-      // status? }), not `unknown`. Adapters MUST scrub before throwing —
-      // a raw `fetch` failure or TLS error would carry request headers
-      // (Authorization, mTLS material) and bodies (rendered claim PHI)
-      // through default cause-chain serialization in pino/Sentry/OTel.
       const scrubbed = {
         name: 'TransportError',
         message: 'EHOSTUNREACH',
@@ -278,12 +274,6 @@ describe('JurisdictionAdapter contract', () => {
     });
 
     it('runtime-narrows cause to {name, message, status?} even when caller bypasses the type via as-cast', () => {
-      // Defense-in-depth: a JS caller or `as unknown as ScrubbedCause`
-      // cast can satisfy the compile-time type structurally with an
-      // Error / Response / fetch-failure object that carries
-      // headers, bodies, stacks, or nested .cause / .config /
-      // .request properties. The constructor must not propagate any
-      // of those.
       const dangerous = {
         name: 'AxiosError',
         message: 'Request failed with status code 401',
@@ -292,7 +282,7 @@ describe('JurisdictionAdapter contract', () => {
         config: { headers: { Authorization: 'Bearer SECRET-TOKEN' } },
         request: { _header: 'POST / HTTP/1.1\nAuthorization: Bearer SECRET' },
         stack: 'Error: ...\n  at /path/to/secret-file.ts:42',
-      } as unknown as import('./errors.js').ScrubbedCause;
+      } as unknown as ScrubbedCause;
 
       const e = new AdapterErrorException({
         kind: 'transport',
@@ -362,8 +352,6 @@ describe('JurisdictionAdapter contract', () => {
       });
 
       it('redacts material when wrapped in a plain object that is logged', async () => {
-        // Common shape: a structured logger receives `{ creds, op: 'submit' }`.
-        // Both the JSON path and the inspect path must redact.
         const { inspect } = await import('node:util');
         const creds = new SubmitterCredentials({
           jurisdiction: 'ontario-mcedt',
