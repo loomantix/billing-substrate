@@ -18,6 +18,14 @@ name: Publish
 # Trusted Publisher must be configured per-package on npmjs.com, scoped
 # to this repo + workflow filename.
 #
+# Note: actions/setup-node is intentionally NOT given `registry-url` /
+# `scope`. Those inputs cause it to write `~/.npmrc` with a placeholder
+# `_authToken=${NODE_AUTH_TOKEN}` (literal string `XXXXX-XXXXX-...` when
+# no token is supplied). pnpm publish then sends that placeholder as a
+# bearer token, npm rejects it with 404, and the OIDC handshake never
+# fires. Each package's `publishConfig.registry` provides the correct
+# registry URL, so no `.npmrc` setup is required here.
+#
 # Provenance: `--provenance` produces an SLSA build attestation linking
 # the published tarball to this workflow run + the tag SHA. Verifiable
 # from `npm view <pkg>` and via `npm audit signatures`.
@@ -43,8 +51,6 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: pnpm
-          registry-url: 'https://registry.npmjs.org'
-          scope: '@loomantix'
 
       - run: pnpm install --frozen-lockfile
 
