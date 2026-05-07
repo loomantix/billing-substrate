@@ -78,15 +78,28 @@ export function asBatchItemIndex(n: number): BatchItemIndex | null {
 }
 
 export function isoDateToUtcMs(value: IsoDate): number {
+  // Re-validate shape AND calendar — a forged `as IsoDate` cast can
+  // ship a value like `'2024-02-30'` that matches the regex but is
+  // not a real calendar day. Without the round-trip check, Date.UTC
+  // silently normalizes (Feb 30 → Mar 1) and the brand's "calendar
+  // validity" guarantee evaporates.
   const match = ISO_DATE_PATTERN.exec(value);
   if (!match) {
     throw new Error('IsoDate brand violated: not YYYY-MM-DD shape');
   }
-  return Date.UTC(
-    Number.parseInt(match[1] as string, 10),
-    Number.parseInt(match[2] as string, 10) - 1,
-    Number.parseInt(match[3] as string, 10),
-  );
+  const year = Number.parseInt(match[1] as string, 10);
+  const month = Number.parseInt(match[2] as string, 10);
+  const day = Number.parseInt(match[3] as string, 10);
+  const utcMs = Date.UTC(year, month - 1, day);
+  const reconstructed = new Date(utcMs);
+  if (
+    reconstructed.getUTCFullYear() !== year ||
+    reconstructed.getUTCMonth() !== month - 1 ||
+    reconstructed.getUTCDate() !== day
+  ) {
+    throw new Error('IsoDate brand violated: not a valid calendar day');
+  }
+  return utcMs;
 }
 
 /**
@@ -189,8 +202,10 @@ export type Severity = 'error' | 'warning';
 
 /**
  * True when a finding at this severity blocks `render` / `submit`.
- * Exhaustive switch so any future {@link Severity} addition is a
- * build error rather than a silent posture regression.
+ * Compile-time exhaustive (the `never` assignment in the default
+ * fails the build if a future {@link Severity} addition isn't
+ * handled) AND runtime fail-closed (throws if a future variant
+ * arrives via `as`-cast / JS bypass).
  */
 export function isBlockingFinding(severity: Severity): boolean {
   switch (severity) {
@@ -198,8 +213,10 @@ export function isBlockingFinding(severity: Severity): boolean {
       return true;
     case 'warning':
       return false;
-    default:
-      throw new Error(`unhandled Severity: ${String(severity)}`);
+    default: {
+      const _exhaustive: never = severity;
+      throw new Error(`unhandled Severity: ${String(_exhaustive)}`);
+    }
   }
 }
 

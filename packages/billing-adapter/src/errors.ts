@@ -126,8 +126,10 @@ export function describeAdapterError(error: AdapterError): string {
       return `after ${error.afterMs} ms`;
     case 'not-supported':
       return error.operation;
-    default:
-      throw new Error(`unhandled AdapterError variant: ${(error as { kind?: unknown }).kind}`);
+    default: {
+      const _exhaustive: never = error;
+      throw new Error(`unhandled AdapterError variant: ${String((_exhaustive as { kind?: unknown }).kind)}`);
+    }
   }
 }
 

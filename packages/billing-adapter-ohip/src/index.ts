@@ -165,8 +165,10 @@ function describeEmitError(error: EmitError): string {
       return `items[${error.itemIndex}] has a patient block with empty ${error.field}`;
     case 'missing-item':
       return missingItemMessage(error.itemIndex);
-    default:
-      throw new Error(`unhandled EmitError variant: ${(error as { kind?: unknown }).kind}`);
+    default: {
+      const _exhaustive: never = error;
+      throw new Error(`unhandled EmitError variant: ${String((_exhaustive as { kind?: unknown }).kind)}`);
+    }
   }
 }
 
@@ -185,10 +187,17 @@ function pathForEmitError(error: EmitError): string | undefined {
  * and inner `message` carry PHI (a HIN/DoB/name); only structural
  * facts cross the public boundary.
  */
-function classifyBadAsciiByte(code: number): 'lowercase' | 'non-printable' | 'non-ASCII' {
+function classifyBadAsciiByte(
+  code: number,
+): 'lowercase' | 'non-printable' | 'non-ASCII' | 'invalid' {
+  // Order matters: check non-ASCII (>=0x80) first, then non-printable
+  // controls (<0x20 || ==0x7F), then lowercase. The final `'invalid'`
+  // covers printable ASCII that fails a value-domain check (e.g.
+  // payee 'X' — printable, ASCII, uppercase, but not in {P,S}).
+  if (code >= 0x80) return 'non-ASCII';
+  if (code < ASCII_SPACE || code === 0x7f) return 'non-printable';
   if (code >= ASCII_LOWERCASE_A && code <= ASCII_LOWERCASE_Z) return 'lowercase';
-  if (code < ASCII_SPACE || code > ASCII_TILDE) return 'non-printable';
-  return 'non-ASCII';
+  return 'invalid';
 }
 
 function describeEncodeError(error: EncodeError): string {
@@ -203,8 +212,10 @@ function describeEncodeError(error: EncodeError): string {
       return 'value contains non-numeric content';
     case 'invalid-date':
       return 'value is not a valid YYYY-MM-DD date';
-    default:
-      throw new Error(`unhandled EncodeError variant: ${(error as { kind?: unknown }).kind}`);
+    default: {
+      const _exhaustive: never = error;
+      throw new Error(`unhandled EncodeError variant: ${String((_exhaustive as { kind?: unknown }).kind)}`);
+    }
   }
 }
 

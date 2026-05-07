@@ -107,21 +107,18 @@ jobs:
         id: tier
         env:
           EVENT_NAME: ${{ github.event_name }}
-          # Default to `pro` when the input is absent (e.g. API-triggered
-          # workflow_dispatch without a `tier` field). The Actions UI
-          # already defaults to `pro` via the input definition, but the
-          # `|| 'pro'` fallback makes the contract uniform across entry
-          # points so manual runs reliably get Pro.
+          # Default to `flash` when the input is absent (e.g. API-triggered
+          # workflow_dispatch without a `tier` field). The Actions UI also
+          # defaults to `flash` via the input definition; the `|| 'flash'`
+          # fallback keeps cost bounded for non-UI dispatch paths.
           INPUT_TIER: ${{ github.event.inputs.tier || 'flash' }}
           # Model IDs — adjust here if Google renames models.
           # Flash is ~10-20x cheaper than Pro at similar code-review quality.
           FLASH_MODEL: gemini-flash-latest
           PRO_MODEL: gemini-3.1-pro-preview
         run: |
-          # Auto-runs (pull_request.opened / ready_for_review) are always
-          # Flash (no reference tree). Manual dispatch honors the input,
-          # which defaults to `pro` (with reference tree) via both the
-          # workflow_dispatch input default and the `|| 'pro'` env fallback.
+          # Manual dispatch with `tier=pro` uses Pro (with reference tree);
+          # all other paths use Flash (no reference tree, cheap).
           if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_TIER" = "pro" ]; then
             TIER=pro
             MODEL="$PRO_MODEL"

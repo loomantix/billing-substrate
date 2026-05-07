@@ -98,8 +98,10 @@ function buildEmitExceptionMessage(error: EmitError): string {
       return `patient-missing-required-field: items[${error.itemIndex}].${error.field}`;
     case 'missing-item':
       return `missing-item: items[${error.itemIndex}]`;
-    default:
-      throw new Error(`unhandled EmitError variant: ${(error as { kind?: unknown }).kind}`);
+    default: {
+      const _exhaustive: never = error;
+      throw new Error(`unhandled EmitError variant: ${String((_exhaustive as { kind?: unknown }).kind)}`);
+    }
   }
 }
 

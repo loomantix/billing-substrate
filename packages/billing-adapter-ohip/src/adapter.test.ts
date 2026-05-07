@@ -474,6 +474,41 @@ describe('translateRenderException — defense-in-depth contract translation', (
     expect(v.message).not.toContain('abc');
   });
 
+  it('classifies bad bytes correctly through the surface message (lowercase / non-printable / non-ASCII / invalid)', () => {
+    // Pin classifyBadAsciiByte's category mapping via the surface
+    // message. The reordering bug — where 0x80+ matched the
+    // non-printable branch first and the non-ASCII branch was
+    // unreachable — would silently pass a "throws" test. We need
+    // the category itself in the assertion.
+    const cases: Array<[number, string]> = [
+      [0x61, 'lowercase'],       // 'a'
+      [0x7a, 'lowercase'],       // 'z'
+      [0x1f, 'non-printable'],   // US (just below space)
+      [0x7f, 'non-printable'],   // DEL
+      [0x00, 'non-printable'],   // NUL
+      [0x80, 'non-ASCII'],       // just above printable ASCII
+      [0xff, 'non-ASCII'],       // high byte
+      [0x58, 'invalid'],         // 'X' — printable ASCII, uppercase, but not in {P,S} for payee
+      [0x60, 'invalid'],         // backtick — printable ASCII, not lowercase letter
+    ];
+    for (const [code, expectedClass] of cases) {
+      const inner = new EncodeException({
+        kind: 'invalid-character-class',
+        path: 'payee',
+        value: String.fromCharCode(code),
+        badCharCode: code,
+        badCharIndex: 0,
+        message: 'irrelevant',
+      });
+      const result = translateRenderException(inner);
+      if (result.kind !== 'validation') {
+        throw new Error(`expected validation for code 0x${code.toString(16)}`);
+      }
+      const surfaceMessage = result.report.violations[0]!.message;
+      expect(surfaceMessage).toContain(expectedClass);
+    }
+  });
+
   it('sanitizes EncodeException invalid-character-class — does NOT echo the raw value (PHI: HIN, name)', () => {
     const inner = new EncodeException({
       kind: 'invalid-character-class',
