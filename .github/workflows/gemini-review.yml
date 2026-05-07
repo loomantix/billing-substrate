@@ -622,7 +622,7 @@ jobs:
                 # it case-insensitively before path/line extraction so the
                 # captured $m.p still maps to a valid-lines.tsv entry. The
                 # normalized form is also used for the body fallback so a
-                # cross-cutting finding with stray PATH: doesn't render the
+                # cross-cutting finding with stray PATH: does not render the
                 # literal prefix in the posted comment.
                 (($f.b // "") | sub("^path:"; ""; "i")) as $b_norm |
                 (if ($b_norm | test("^\\S+:\\d+\\s+—\\s+"))
