@@ -1,6 +1,6 @@
 {
   "name": "@loomantix/billing-adapter",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Contract package for the billing-substrate. Defines the JurisdictionAdapter trait and supporting data types every jurisdictional adapter implements.",
   "license": "Apache-2.0",
   "repository": {

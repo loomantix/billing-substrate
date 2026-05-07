@@ -1,6 +1,6 @@
 {
   "name": "@loomantix/billing-adapter-ohip",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Ontario MCEDT (OHIP) reference adapter for the billing-substrate. Renders ClaimBatch into HEB/HEH/HET/HEE record-format claim files.",
   "license": "Apache-2.0",
   "repository": {
@@ -42,7 +42,7 @@
     "prepublishOnly": "tsc -p tsconfig.json"
   },
   "peerDependencies": {
-    "@loomantix/billing-adapter": "^0.1.0"
+    "@loomantix/billing-adapter": "^0.2.0"
   },
   "devDependencies": {
     "@loomantix/billing-adapter": "workspace:*",
