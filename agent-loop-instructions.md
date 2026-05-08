@@ -6,50 +6,58 @@ You're working autonomously on a single GitHub issue in this repository. Read th
 
 ## Repo overview
 
-TODO: 2–3 sentences describing this repo. Tech stack, what it produces, who consumes it.
+OSS multi-jurisdiction healthcare claims-adapter substrate. TypeScript pnpm monorepo shipping `@loomantix/billing-adapter` (the contract package — `ClaimBatch`, `ClaimRenderer`, `ClaimSubmitter`, `AdapterError`) and `@loomantix/billing-adapter-ohip` (the Ontario MCEDT reference implementation). Consumed by FHIR-based EMRs that need to bill against a jurisdictional payer; per-country adapters land as independent packages contributed by the people who actually need them.
 
 ## Build / test
 
-TODO: list the commands an agent should run to verify a change locally before pushing. Example shape:
-
 ```bash
-# install deps
-<install command>
+# install deps (frozen lockfile, matches CI)
+pnpm install --frozen-lockfile
 
-# build
-<build command>
+# type-check all packages
+pnpm -r --if-present run typecheck
 
-# unit + integration tests
-<test command>
+# unit + integration tests (vitest)
+pnpm -r --if-present run test
 
-# format / lint
-<format check command>
+# build all packages (tsc per package)
+pnpm -r --if-present run build
 ```
+
+CI runs Type-check, Test, and Build as required checks on PRs targeting `main`. There is no lint script in this repo — type-check is the static-analysis gate.
 
 ## Commit + PR rules
 
-TODO: customize for this repo's conventions. Common conventions to keep or remove:
-
-- **Conventional commits** if used: `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`. PR titles match.
-- **DCO sign-off** if enforced: every commit needs `git commit -s`. CI rejects PRs without the trailer.
-- **Signed commits** if required on the base branch — don't bypass with `--no-gpg-sign` or `-c commit.gpgsign=false`.
-- **Annotated tags** if used: `git tag -a -m "..."`.
-- **PR base branch**: TODO (often `main`; some repos use `staging` or another).
+- **Conventional commits** required: `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`, `ci:`. PR titles follow the same format.
+- **DCO sign-off** enforced. Every commit must carry a `Signed-off-by:` trailer (`git commit -s`). The DCO check runs on every PR and rejects unsigned commits.
+- **Signed commits**: recent commits on `main` are GPG-signed in practice. Don't bypass with `--no-gpg-sign` or `-c commit.gpgsign=false`.
+- **Annotated tags only** for releases (`git tag -a -m "..."`). Existing tags (`v0.1.1`, `v0.2.0`) are annotated; the publish workflow triggers on `v*` push.
+- **PR base branch**: `main`. Branch protection is on with strict mode (must be up-to-date) and no admin bypass; direct push is blocked.
+- **Merge commits only** — repo policy is no squash/rebase merges.
 - **Heredocs in `gh` commands cause permission prompts** — write multiline bodies to a temp file first, then `gh pr create --body-file <path>`.
 
 ## What NOT to edit
 
-If this repo consumes synced files from an upstream (check for `.github/workflows/sync-from-upstream.yml`), those files are overwritten on every sync — local edits are lost. The list below is a starting set; the canonical list lives in the upstream's sync manifest, not in your consumer repo. Adjust the entries below to match what your sync workflow actually pulls.
+This repo consumes synced files from `loomantix/claude-platform` via `.github/workflows/sync-from-upstream.yml`. The files listed below are overwritten on every sync — local edits will be reverted. The canonical list is the upstream's `scripts/sync-targets.yml`; this repo's `.platform-config.yml` declares an empty `skip_targets:`, so every non-`delete` destination in the manifest applies here.
 
-Common synced surfaces:
+Synced surfaces (do **not** edit in this repo):
 
-- `.claude/skills/**`
-- `.claude/agents/**`
+- `.claude/skills/issues/SKILL.md` and `scripts/ready.py`, `scripts/link.py`
+- `.claude/skills/refactorpass/SKILL.md`
+- `.claude/skills/grill/SKILL.md`
+- `.claude/skills/deepgrill/SKILL.md`
+- `.claude/skills/reviewit/SKILL.md`
+- `.claude/skills/copilot-review/SKILL.md`
+- `.claude/skills/feature-dev/SKILL.md`
+- `.claude/skills/agent-loop/SKILL.md` and `scripts/agent-loop.sh`
+- `.claude/agents/code-explorer.md`, `code-architect.md`, `code-reviewer.md`
 - `.claude/REVIEW_WORKFLOW.md`
 - `.claude/settings.json`
-- `.github/copilot-instructions.md`
+- `.github/copilot-instructions.md` (generated from the upstream template using values in `.platform-config.yml` — change the substitution values, not the generated file)
 
-If your issue requires changing any of these, **stop and post a comment on the issue** explaining the change belongs upstream. Don't edit the consumer copy — it'll be reverted on the next sync.
+This file (`agent-loop-instructions.md`) is bootstrapped via `create_if_missing: true` and is **not** overwritten by subsequent syncs — local customizations here are safe.
+
+If your issue requires changing any of the synced surfaces above, **stop and post a comment on the issue** explaining the change belongs upstream. Don't edit the consumer copy — it'll be reverted on the next sync.
 
 ## Filesystem hygiene
 
