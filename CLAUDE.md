@@ -2,18 +2,16 @@
 
 OSS multi-jurisdiction healthcare claims-adapter substrate. Apache 2.0 + DCO. See [README.md](README.md) for what ships here, [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow, and [docs/architecture/contract-design.md](docs/architecture/contract-design.md) for the formal contract spec.
 
-## Public-repo policy
+## Public-Repo Policy
 
-This repo is public. When working in it, do **not**:
+This repo is public. Keep repository content suitable for public readers:
 
-- Reference any private Loomantix repository by name.
-- Describe sync-engine internals tied to a private deployment (specific consumer wiring, internal repo names, App slugs, secret names beyond what is already in the public templates).
-- Describe fleet topology (the number or identity of consumer repos, deployment cadence specifics, internal escalation paths).
-- Describe the project's compliance posture (audit findings, control mappings, vendor relationships).
+- Do not reference non-public repositories, systems, incidents, or trackers by name.
+- Do not document deployment-specific wiring, app slugs, secret names, or escalation paths beyond the public templates.
+- Keep compliance and security rationale generic; do not include organization-specific evidence or customer-specific details.
+- Put project-specific consumer details in that consumer's own repository, not here.
 
-State the rule and the intent, not the list. The denylist that enforces this lives off-repo and stays private; the in-repo reminder is the human-facing half of the same policy.
-
-If a piece of work would otherwise need to mention any of the above, file and discuss it in your private tracker and reference this repo from there — not the other way around.
+If work needs non-public context, discuss that context outside this public repository and keep any public issue or PR focused on the reusable change.
 
 ## Conventions
 

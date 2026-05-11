@@ -29,7 +29,7 @@ billing-substrate/
 │   ├── billing-adapter/                # @loomantix/billing-adapter — contract package
 │   │   └── src/                        # ClaimBatch, ClaimRenderer, ClaimSubmitter, AdapterError, …
 │   └── billing-adapter-ohip/           # @loomantix/billing-adapter-ohip — Ontario reference impl
-└── (future) deployment/                # Loomantix's commercial deployment shape (separate ADR)
+└── (future) deployment/                # Optional deployment-specific integrations
 ```
 
 ### Layering
@@ -48,7 +48,7 @@ Layer 3 is what `@loomantix/billing-adapter` formalizes. Layer 2 (coding systems
 
 - **No domain types from any consumer leak into adapters.** No `Physician`, `TimeEntry`, `FhoGroup`, `Encounter` — adapters operate purely on `claims-types` shapes. Consumers translate.
 - **No domain rules in adapters.** Caps, stale-date, business validation belong to consumer products. Adapters validate wire-format correctness only.
-- **One deployment cert per jurisdiction.** A deployment of the substrate (Loomantix's, or anyone's) holds one signing cert per jurisdiction whose CA accepts it. Cert handling is the deployment's responsibility, not the substrate package's.
+- **One deployment cert per jurisdiction.** A deployment of the substrate holds one signing cert per jurisdiction whose CA accepts it. Cert handling is the deployment's responsibility, not the substrate package's.
 - **Globalization is first-class.** New jurisdictions ship as new packages, not branches in core.
 - **Adapters do not assume a deployment shape.** They expose pure functions and a trait. Whether a deployment runs them as a service, embeds them in a backend, or runs them as a serverless function is the deployment's choice.
 
