@@ -54,6 +54,24 @@ Layer 3 is what `@loomantix/billing-adapter` formalizes. Layer 2 (coding systems
 
 ## Getting started
 
+### Use the packages
+
+Install the contract package when you want to build against the substrate interface:
+
+```bash
+pnpm add @loomantix/billing-adapter
+```
+
+Install a jurisdiction adapter when you want a concrete implementation. The Ontario reference adapter also requires the contract package:
+
+```bash
+pnpm add @loomantix/billing-adapter @loomantix/billing-adapter-ohip
+```
+
+The public API starts from `JurisdictionAdapter`, `ClaimBatch`, `ClaimRenderer`, `ClaimSubmitter`, and the supporting validation/result types exported by `@loomantix/billing-adapter`. See [`docs/architecture/authoring-an-adapter.md`](./docs/architecture/authoring-an-adapter.md) for the contributor path and [`docs/architecture/contract-design.md`](./docs/architecture/contract-design.md) for the complete contract.
+
+### Work locally
+
 To work on the substrate locally:
 
 ```bash
@@ -62,7 +80,7 @@ pnpm -r build
 pnpm -r test
 ```
 
-Both packages (`@loomantix/billing-adapter` contract + `@loomantix/billing-adapter-ohip` reference adapter) are at v0.1.0. The OHIP adapter is in early Phase 1 — class shell + Ontario identifier validation; record encoders, file orchestrator, and the full `ClaimRenderer` implementation land in subsequent PRs against this repo.
+Both packages (`@loomantix/billing-adapter` contract + `@loomantix/billing-adapter-ohip` reference adapter) are at v0.2.0. The OHIP adapter is in early Phase 1 — class shell + Ontario identifier validation; record encoders, file orchestrator, and the full `ClaimRenderer` implementation land in subsequent PRs against this repo.
 
 ## Contributing
 
