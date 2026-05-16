@@ -5,8 +5,10 @@
 #
 # Billing-substrate-specific values:
 #   - Targets `main`
-#   - Uses the `loomantix` GitHub App via LOOM_BOT_APP_ID / LOOM_BOT_APP_PRIVATE_KEY
-#     (org-installed with `contents: write` and `pull_requests: write`)
+#   - Uses the `loomantix-sync-public` GitHub App via LOOM_OSS_BOT_APP_ID /
+#     LOOM_OSS_BOT_APP_PRIVATE_KEY. Scoped to public consumer repos only
+#     (billing-substrate, platform-oss) so a compromise here cannot mint
+#     tokens against private fleet repos.
 #   - Anonymous clone of the upstream — claude-platform is public, no read token needed
 #
 # Trust model: Job A clones upstream and runs `sync-engine.py` under
@@ -153,8 +155,8 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
         with:
-          app-id: ${{ secrets.LOOM_BOT_APP_ID }}
-          private-key: ${{ secrets.LOOM_BOT_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.LOOM_OSS_BOT_APP_ID }}
+          private-key: ${{ secrets.LOOM_OSS_BOT_APP_PRIVATE_KEY }}
 
       - name: Checkout consumer repo (for vendored scripts only)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
