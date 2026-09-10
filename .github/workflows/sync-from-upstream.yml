@@ -1,15 +1,4 @@
-# Sync canonical files from loomantix/claude-platform — produces verified commits.
-#
-# Adapted from the canonical template at:
-# https://github.com/loomantix/claude-platform/blob/main/.github/workflows/sync-from-upstream.yml.template
-#
-# Billing-substrate-specific values:
-#   - Targets `main`
-#   - Uses the `loomantix-sync-public` GitHub App via LOOM_OSS_BOT_APP_ID /
-#     LOOM_OSS_BOT_APP_PRIVATE_KEY. Scoped to public consumer repos only
-#     (billing-substrate, platform-oss) so a compromise here cannot mint
-#     tokens against private fleet repos.
-#   - Anonymous clone of the upstream — claude-platform is public, no read token needed
+# Sync canonical files from loomantix/activeloom — produces verified commits.
 #
 # Trust model: Job A clones upstream and runs `sync-engine.py` under
 # `permissions: { contents: read }` with no App token, then hands a tarball
@@ -18,7 +7,7 @@
 # against Job A's payload — it never executes upstream-cloned code. A
 # compromise of upstream `sync-engine.py` cannot reach the bot token.
 #
-# `UPSTREAM_REF` is a tag (`sync-v1`), not `main`, so upstream merges don't
+# `UPSTREAM_REF` is a tag (`sync-v2`), not `main`, so upstream merges don't
 # auto-propagate; bumping the tag is the deliberate ship gate.
 #
 # Kill switch: `SKIP_UPSTREAM_SYNC` repo variable.
@@ -37,8 +26,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  UPSTREAM_REPO: loomantix/claude-platform
-  UPSTREAM_REF: sync-v1
+  UPSTREAM_REPO: loomantix/activeloom
+  UPSTREAM_REF: sync-v2
   SYNC_BRANCH_PREFIX: sync/upstream
   PR_BASE_BRANCH: main
 
@@ -57,7 +46,7 @@ jobs:
       PAYLOAD_DIR: /tmp/sync-payload
     steps:
       - name: Checkout consumer repo
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.PR_BASE_BRANCH }}
           persist-credentials: false # upstream code runs next; leave no auth on disk
@@ -86,7 +75,7 @@ jobs:
           git checkout -q FETCH_HEAD
 
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
 
@@ -153,13 +142,13 @@ jobs:
     steps:
       - name: Generate App installation token
         id: app-token
-        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.LOOM_OSS_BOT_APP_ID }}
           private-key: ${{ secrets.LOOM_OSS_BOT_APP_PRIVATE_KEY }}
 
       - name: Checkout consumer repo (for vendored scripts only)
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.PR_BASE_BRANCH }}
           persist-credentials: false # gh + API use the App token via env, not git creds
@@ -237,15 +226,23 @@ jobs:
             --message "chore: sync from ${UPSTREAM_REPO}@${UPSTREAM_REF}" \
             --app-slug "${{ steps.app-token.outputs.app-slug }}" \
             --payload-dir "$PAYLOAD_DIR/tree" \
-            --manifest "$PAYLOAD_DIR/manifest"
+            --manifest "$PAYLOAD_DIR/manifest" \
+            --config .activeloom-config.yml
 
           PR_TITLE="Sync from ${UPSTREAM_REPO}"
-          PR_BODY="Automated sync from \`${UPSTREAM_REPO}@${UPSTREAM_REF}\`. Review the diff carefully before merging — substituted content reflects current \`.platform-config.yml\`."
+          PR_BODY="Automated sync from \`${UPSTREAM_REPO}@${UPSTREAM_REF}\`. Review the diff carefully before merging — substituted content reflects current \`.activeloom-config.yml\`."
           # Explicit existence check beats substring-matching `gh pr create`
-          # stderr — "already exists" appears in unrelated gh errors too.
-          if gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
-            echo "PR for $BRANCH already exists — refreshing"
-            gh pr edit "$BRANCH" --title "$PR_TITLE" --body "$PR_BODY"
+          # stderr — "already exists" appears in unrelated gh errors too. The
+          # check must be open-only: `gh pr view "$BRANCH"` resolves a PR in
+          # ANY state, so a same-day re-sync matched the just-MERGED PR for
+          # today's date-stamped branch and "refreshed" it — a no-op, because a
+          # merged PR cannot reopen — leaving the signed commit on the branch
+          # with no PR at all.
+          EXISTING_PR=$(gh pr list --state open --head "$BRANCH" \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING_PR" ]; then
+            echo "PR #$EXISTING_PR for $BRANCH already open — refreshing"
+            gh pr edit "$EXISTING_PR" --title "$PR_TITLE" --body "$PR_BODY"
           else
             gh pr create \
               --base "${PR_BASE_BRANCH}" \

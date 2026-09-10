@@ -1,0 +1,145 @@
+harnesses:
+  claude:
+    allow_sensitive_writes:
+    - .github/workflows/dco.yml
+    skip_targets: []
+    substitutions:
+      PROJECT_NAME: billing-substrate
+      PROJECT_OVERVIEW: 'OSS substrate for healthcare claims submission and remittance
+        reconciliation.
+
+        Multi-product, multi-jurisdiction. Apache 2.0 + DCO.
+
+
+        The contract package (`@loomantix/billing-adapter`) defines a stable
+
+        interface that any FHIR-based EMR can consume. Per-jurisdiction adapters
+
+        are independent packages contributed by the people who actually need
+
+        them. The first reference implementation is Ontario MCEDT (OHIP).
+
+        '
+      CANONICAL_DOCS: '`docs/architecture/contract-design.md` (formal contract spec),
+        `CONTRIBUTING.md` (in-scope/out-of-scope rules)'
+      STACK_TABLE: "| Layer     | Tech                                          |\n\
+        | --------- | --------------------------------------------- |\n| Language\
+        \  | TypeScript 5.9 (strict, no `any`)             |\n| Workspace | pnpm 10.29\
+        \ with catalog mode                  |\n| Runtime   | Node.js (LTS pinned\
+        \ via `.nvmrc`)             |\n| Tests     | Vitest                      \
+        \                  |\n| License   | Apache 2.0 + DCO sign-off            \
+        \         |\n\nCommon mistakes to flag:\n\n- Non-DCO-signed commits (CI rejects\
+        \ them, but flag in review).\n- Importing consumer-product domain types into\
+        \ adapters.\n- Adapter logic that short-circuits validation reports instead\
+        \ of\n  aggregating every issue.\n- Squash or rebase merge \u2014 repo policy\
+        \ is merge commits only.\n"
+      CODE_RULES: "- **Strict TypeScript everywhere. No `any`.** Require explicit\
+        \ return\n  types on exported package APIs.\n- **DCO sign-off required** on\
+        \ every commit (`git commit -s`). CI rejects\n  commits without a `Signed-off-by:`\
+        \ trailer.\n- **Conventional commits** (`feat:`, `fix:`, `docs:`, `chore:`,\n\
+        \  `refactor:`). PR titles follow the same format.\n- **Apache 2.0 license\
+        \ headers are not required** in source files \u2014\n  license coverage is\
+        \ at the repo level via `LICENSE` + `NOTICE`.\n"
+      DOMAIN_RULES: "## Adapter contract rules (flag any violation as critical)\n\n\
+        - **No domain types from any consumer leak into adapters.** No\n  `Physician`,\
+        \ `TimeEntry`, `FhoGroup`, `Encounter` types or fields.\n  Adapters operate\
+        \ purely on `claims-types` shapes; consumers translate.\n- **No business logic\
+        \ in adapters.** Caps, stale-date checks, indirect\n  / admin ratio enforcement,\
+        \ after-hours premium math \u2014 all of that\n  belongs in the consuming\
+        \ product. Adapters validate wire-format\n  correctness only.\n- **Validation\
+        \ reports must be aggregated, not short-circuited.** A\n  consumer should\
+        \ see every issue at once.\n- **Fail-closed semantics for regulated wire formats.**\
+        \ Refuse to render\n  a malformed claim rather than render one the payer will\
+        \ silently\n  reject downstream.\n- **One deployment cert per jurisdiction.**\
+        \ Cert handling is the\n  deployment's responsibility, not the substrate package's.\
+        \ Adapter\n  packages MUST NOT log, persist, or otherwise retain private keys.\n\
+        - **Globalization is first-class.** New jurisdictions ship as new\n  packages\
+        \ (`@<scope>/billing-adapter-<jurisdiction>`), never as\n  branches in the\
+        \ core contract package.\n"
+      REVIEW_FOCUS: "1. **Correctness against jurisdictional spec** \u2014 wire-format\
+        \ conformance,\n   record-length, character set, date encoding, mandatory\
+        \ fields.\n2. **Adapter independence** \u2014 does the change preserve the\
+        \ \"no consumer\n   domain types in adapters\" invariant?\n3. **Validation\
+        \ completeness** \u2014 does new adapter logic aggregate all\n   issues, or\
+        \ does it short-circuit on the first?\n4. **Security** \u2014 cert handling\
+        \ (no logging or persistence of private\n   keys), input validation at the\
+        \ contract boundary, no SQL composition\n   in any persistence layer.\n5.\
+        \ **Convention adherence** \u2014 does new code follow patterns already in\n\
+        \   `packages/billing-adapter/src/`?\n6. **Testing gaps** \u2014 new adapter\
+        \ logic without snapshot tests against\n   fixture inputs is incomplete.\n\
+        7. **Maintainability** \u2014 dead code, premature abstractions, defensive\n\
+        \   error handling for scenarios that can't happen.\n"
+      WHAT_NOT_TO_SUGGEST_EXTRA: "- **Don't suggest adding domain logic to adapters.**\
+        \ Caps, stale-date\n  checks, business validation belong in consumer products,\
+        \ not in\n  adapters.\n- **Don't suggest coupling adapters to specific FHIR\
+        \ profiles** beyond\n  what the contract requires.\n"
+substitutions:
+  PROJECT_NAME: billing-substrate
+  PROJECT_OVERVIEW: 'OSS substrate for healthcare claims submission and remittance
+    reconciliation.
+
+    Multi-product, multi-jurisdiction. Apache 2.0 + DCO.
+
+
+    The contract package (`@loomantix/billing-adapter`) defines a stable
+
+    interface that any FHIR-based EMR can consume. Per-jurisdiction adapters
+
+    are independent packages contributed by the people who actually need
+
+    them. The first reference implementation is Ontario MCEDT (OHIP).
+
+    '
+  CANONICAL_DOCS: '`docs/architecture/contract-design.md` (formal contract spec),
+    `CONTRIBUTING.md` (in-scope/out-of-scope rules)'
+  STACK_TABLE: "| Layer     | Tech                                          |\n| ---------\
+    \ | --------------------------------------------- |\n| Language  | TypeScript\
+    \ 5.9 (strict, no `any`)             |\n| Workspace | pnpm 10.29 with catalog\
+    \ mode                  |\n| Runtime   | Node.js (LTS pinned via `.nvmrc`)   \
+    \          |\n| Tests     | Vitest                                        |\n\
+    | License   | Apache 2.0 + DCO sign-off                     |\n\nCommon mistakes\
+    \ to flag:\n\n- Non-DCO-signed commits (CI rejects them, but flag in review).\n\
+    - Importing consumer-product domain types into adapters.\n- Adapter logic that\
+    \ short-circuits validation reports instead of\n  aggregating every issue.\n-\
+    \ Squash or rebase merge \u2014 repo policy is merge commits only.\n"
+  CODE_RULES: "- **Strict TypeScript everywhere. No `any`.** Require explicit return\n\
+    \  types on exported package APIs.\n- **DCO sign-off required** on every commit\
+    \ (`git commit -s`). CI rejects\n  commits without a `Signed-off-by:` trailer.\n\
+    - **Conventional commits** (`feat:`, `fix:`, `docs:`, `chore:`,\n  `refactor:`).\
+    \ PR titles follow the same format.\n- **Apache 2.0 license headers are not required**\
+    \ in source files \u2014\n  license coverage is at the repo level via `LICENSE`\
+    \ + `NOTICE`.\n"
+  DOMAIN_RULES: "## Adapter contract rules (flag any violation as critical)\n\n- **No\
+    \ domain types from any consumer leak into adapters.** No\n  `Physician`, `TimeEntry`,\
+    \ `FhoGroup`, `Encounter` types or fields.\n  Adapters operate purely on `claims-types`\
+    \ shapes; consumers translate.\n- **No business logic in adapters.** Caps, stale-date\
+    \ checks, indirect\n  / admin ratio enforcement, after-hours premium math \u2014\
+    \ all of that\n  belongs in the consuming product. Adapters validate wire-format\n\
+    \  correctness only.\n- **Validation reports must be aggregated, not short-circuited.**\
+    \ A\n  consumer should see every issue at once.\n- **Fail-closed semantics for\
+    \ regulated wire formats.** Refuse to render\n  a malformed claim rather than\
+    \ render one the payer will silently\n  reject downstream.\n- **One deployment\
+    \ cert per jurisdiction.** Cert handling is the\n  deployment's responsibility,\
+    \ not the substrate package's. Adapter\n  packages MUST NOT log, persist, or otherwise\
+    \ retain private keys.\n- **Globalization is first-class.** New jurisdictions\
+    \ ship as new\n  packages (`@<scope>/billing-adapter-<jurisdiction>`), never as\n\
+    \  branches in the core contract package.\n"
+  REVIEW_FOCUS: "1. **Correctness against jurisdictional spec** \u2014 wire-format\
+    \ conformance,\n   record-length, character set, date encoding, mandatory fields.\n\
+    2. **Adapter independence** \u2014 does the change preserve the \"no consumer\n\
+    \   domain types in adapters\" invariant?\n3. **Validation completeness** \u2014\
+    \ does new adapter logic aggregate all\n   issues, or does it short-circuit on\
+    \ the first?\n4. **Security** \u2014 cert handling (no logging or persistence\
+    \ of private\n   keys), input validation at the contract boundary, no SQL composition\n\
+    \   in any persistence layer.\n5. **Convention adherence** \u2014 does new code\
+    \ follow patterns already in\n   `packages/billing-adapter/src/`?\n6. **Testing\
+    \ gaps** \u2014 new adapter logic without snapshot tests against\n   fixture inputs\
+    \ is incomplete.\n7. **Maintainability** \u2014 dead code, premature abstractions,\
+    \ defensive\n   error handling for scenarios that can't happen.\n"
+  WHAT_NOT_TO_SUGGEST_EXTRA: "- **Don't suggest adding domain logic to adapters.**\
+    \ Caps, stale-date\n  checks, business validation belong in consumer products,\
+    \ not in\n  adapters.\n- **Don't suggest coupling adapters to specific FHIR profiles**\
+    \ beyond\n  what the contract requires.\n"
+skip_targets: []
+allow_sensitive_writes:
+- .github/workflows/dco.yml
