@@ -144,3 +144,18 @@ skip_targets: []
 allow_sensitive_writes:
 - .github/workflows/dco.yml
 - .github/workflows/review-glance-label.yml
+allowed_destinations:
+- .github/copilot-instructions.md
+- .github/workflows/dco.yml
+- agent-loop-instructions.md
+- .claude/skills/**
+- .claude/agents/**
+- .claude/hooks/**
+- .claude/prompt-stack.json
+- .claude/references/local-review-ledger.md
+- .claude/references/house-tokens.css
+- .claude/REVIEW_WORKFLOW.md
+- .claude/MODEL_NOTES.md
+- .claude/SKILL_AUTHORING.md
+- .claude/settings.json
+- .github/workflows/review-glance-label.yml
