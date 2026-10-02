@@ -94,7 +94,9 @@ the fix bias, as set out under "Convergence rounds" below. It does not change th
 post-before-editing, reply, or resolve contract, and it does not raise the round
 cap.
 
-State the resolved round and stance in the output.
+Take the stance from `authorize-pass`'s `stance` field and state the round and
+stance in the output. The ledger refuses a convergence result that fixed a
+non-blocking finding.
 
 ## Phase 0: Fresh context and PR boundary
 
@@ -137,7 +139,8 @@ does not admit a session that implemented the feature before review started.
    helper is a no-op when extraction is not enabled for this repository, and it
    reports the separate emission gate that decides whether this pass may publish
    a record at all. The skill and identity-resolution setup above is outside the
-   measurement boundary.
+   measurement boundary. When the runner opened the boundary, reuse its key and
+   snapshot per "Runner-owned boundary" instead.
 8. Read every prior review thread, including resolved and outdated threads.
    Telemetry markers are not review context: exclude them by marker prefix and
    never carry one into a finder prompt or packet. Where any remaining thread
