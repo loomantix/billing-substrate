@@ -217,17 +217,21 @@ merges, and no review chain runs. The entry point prints one line and stops
 before it requires or opens a draft PR, checks context, resolves a round or
 stance, takes a telemetry snapshot, or writes a result, attestation, tier or
 refactor marker, or telemetry record — so none of those artifacts exists for a
-human-glance range. One or more review-significant files means the normal chain.
-A mixed changeset is not a partial human glance.
+human-glance range. One or more review-significant files means the normal chain,
+with one exception: a range whose code and configuration change is short enough
+to read in full gets a human-glance recommendation that stops the same way, and
+the chain runs when a human asks for it. A mixed changeset is not a partial
+human glance.
 
 The workflow's "Human glance" section names the range each entry point
-classifies, the explicit-request override, and the controller-scheduled pass
-that skips the gate. A later push that adds a review-significant file takes the
+classifies, the small-change recommendation and its override, the
+explicit-request override, and the controller-scheduled pass that skips the
+gate. A later push that adds a review-significant file takes the
 PR out of human glance, and the normal tier resolution then covers the whole
 range.
 
 The rules above are executable: `review-ledger classify-changeset --base <sha>
---head <sha>` returns `skip` alongside per-file classifications, and every entry
+--head <sha>` returns `skip` and `smallChange` alongside per-file classifications, and every entry
 point decides from that rather than from its own reading of this paragraph. Four
 skills interpreting the same prose independently is four chances to disagree
 about whether a pass was owed.
@@ -872,10 +876,13 @@ A controller that recorded a successful worker return may pin the sidecar's
 SHA-256 at that boundary and retry `recover-result` with the original
 `write-result` identity arguments and `--expected-recovery-sha256 <pinned-digest>`.
 Omit `--classification`: recovery reads it from the saved candidate. Reuse the
-original pre-pass snapshot. Recovery rechecks the live head, Git transition,
-complete disposition set, and range classification before writing a clean or
-changed result. Then run the ordinary validation and attestation steps. It
-neither launches a reviewer nor starts a run or spends another round.
+original pre-pass snapshot. Recovery may promote a saved `minor` classification
+to `material` when the Git range is classified behavioral, including when it
+cannot be proven non-behavioral. The digest-pinned sidecar retains the original
+candidate. Recovery rechecks the live head, Git transition, complete disposition
+set, and range classification before writing a
+clean or changed result. Then run the ordinary validation and attestation steps.
+It neither launches a reviewer nor starts a run or spends another round.
 
 Missing candidates, unknown worker exits, changed snapshots, altered blocked
 results, and unresolved review work require explicit reconciliation; they cannot
@@ -948,7 +955,7 @@ Result ownership depends on the caller:
 
 ## Record what the pass cost
 
-Every pass attempts to emit one `local-review-telemetry:v1` marker: adversarial reviews,
+Every pass attempts to emit one versioned `local-review-telemetry` marker: adversarial reviews,
 cleanup passes, hosted lanes, and passes that were blocked. A pass whose cost
 vanished from the record would have its churn attributed to nobody. A
 human-glance range is not a pass: it stops before the telemetry snapshot and
@@ -967,6 +974,13 @@ lane, version, and idempotency identifiers public-safe and non-sensitive before
 publishing the marker. It never carries money: rates move, and on a
 subscription plan the marginal cost of a pass is zero, so tokens are stored and
 priced downstream against a dated table.
+
+Known-model buckets use v1. Measured aggregate usage without an observed model
+uses v3 with exactly one `model: null`, `effort: null` bucket; all other fields
+retain the v1 contract. Readers accept both versions and require marker/payload
+agreement. Telemetry v2 remains reserved for the assurance contract. Deploy v3
+reader support before enabling aggregate-usage producers.
+Never replace unknown identity with the requested model or a synthetic model name.
 
 Two rules bind readers:
 

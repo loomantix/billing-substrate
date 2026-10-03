@@ -13,10 +13,13 @@ context-window check, the PR boundary, round and stance, the telemetry
 snapshot, and any marker. Follow [`../../REVIEW_WORKFLOW.md`](../../REVIEW_WORKFLOW.md) "Human glance": on `skip: true` with at
 least one classified file, print that section's one-line message and stop, with
 no draft PR, ledger result, attestation, tier or refactor marker, or telemetry
-record.
+record. On `smallChange: true`, print that section's small-change
+recommendation and stop the same way.
 
-Continue when the range carries a review-significant file, when a human
-explicitly asked for this change to be reviewed anyway, or when
+Continue when the range carries a review-significant file and is not a small
+change, when a human explicitly asked for this change to be reviewed anyway or
+overrode a small-change recommendation, when a small change's open PR already
+carries a tier marker, or when
 `$AGENT_LOOP_REVIEW_RESULT_FILE` is set and the controller that scheduled this
 pass owns the gate.
 
@@ -26,7 +29,7 @@ Run this before launching any reviewer, worker, or runner. When
 `AGENT_LOOP_NONINTERACTIVE=1` or `AGENT_LOOP_REVIEW_ENGINE` is set (a launcher or
 runner started this pass), skip it: the run uses its pinned values,
 and a launcher that reports missing settings is the blocker to report. Otherwise
-run `python3 -I .claude/skills/review-setup/scripts/review-profile.py check`.
+run `python3 -I .claude/skills/review-setup/scripts/review-profile.py check --need reviewit`.
 Exit 0 means continue. Exit 3 with `"configured": true` and only `ENGINE.worker.*`
 keys in `missing` also means continue: no review run reads worker settings, and
 storing them rewrites the shared profile in a schema older helper copies refuse.

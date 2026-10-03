@@ -26,7 +26,7 @@ import { readFileSync as readFileSync4 } from "fs";
 
 // src/constants.ts
 var PROTOCOL_VERSION = 3;
-var PACKAGE_VERSION = true ? "1.5.0" : "0.0.0-dev";
+var PACKAGE_VERSION = true ? "1.6.0" : "0.0.0-dev";
 var SUBPROCESS_MAX_BUFFER = 256 * 1024 * 1024;
 var EXPECTED_ACTOR_ENV = "AGENT_LOOP_REVIEW_ACTOR";
 var EXPECTED_THREADS_SHA256_ENV = "AGENT_LOOP_REVIEW_THREADS_SHA256";
@@ -85,7 +85,6 @@ var FINDING_V1_RE = /^<!-- local-review:v1 engine=(?<engine>codex|claude|gemini|
 var DISPOSITION_V1_RE = /^<!-- local-review-disposition:v1 engine=(?<engine>codex|claude|gemini|antigravity) round=(?<round>[1-9][0-9]*) head=(?<head>[0-9a-f]{40}) fingerprint=(?<fingerprint>[A-Za-z0-9._:/-]+) outcome=(?<outcome>fixed|dismissed|deferred) -->$/m;
 var TELEMETRY_VERSION = 1;
 var TELEMETRY_MARKER_PREFIX = "<!-- local-review-telemetry:";
-var TELEMETRY_V1_MARKER = "<!-- local-review-telemetry:v1 -->";
 var OPEN_TOKEN_RE = /^[a-z0-9-]+$/;
 var PROVIDER_BUCKET_KEY_RE = /^[a-z0-9_]+$/;
 var UTC_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
@@ -116,6 +115,7 @@ var TELEMETRY_STATUSES = [
 var TELEMETRY_TOKEN_SOURCES = [
   "session-log-delta",
   "stream-json",
+  "terminal-json",
   "unscoped-session",
   "unavailable"
 ];
@@ -1248,7 +1248,7 @@ function rowsHaveHistoricalMarkers(rows) {
   });
 }
 
-// ../../node_modules/.pnpm/@babel+parser@8.0.5/node_modules/@babel/parser/lib/index.js
+// ../../node_modules/.pnpm/@babel+parser@8.0.6/node_modules/@babel/parser/lib/index.js
 var Position = class {
   constructor(line, col, index) {
     this.line = void 0;
@@ -2604,10 +2604,10 @@ var types = {
   j_cTag: new TokContext("</tag"),
   j_expr: new TokContext("<tag>...</tag>", true)
 };
-var bmpIdentifierStart = /[\p{ID_Start}\u088f\u0c5c\u0cdc\ua7ce\ua7cf\ua7d2\ua7d4\ua7f1]/u;
-var bmpIdentifier = /[\p{ID_Continue}\u088f\u0c5c\u0cdc\ua7ce\ua7cf\ua7d2\ua7d4\ua7f1\u1acf-\u1add\u1ae0-\u1aeb]/u;
-var supplementaryIdentifierStartCodes = [2368, 25, 1388, 2, 3817, 43, 20677, 24, 3, 24, 287, 4, 6146, 7, 1290, 21, 98, 114, 22734, 30, 2, 2, 2, 1, 2, 6, 3, 4, 10, 1, 53307, 5, 5987, 11, 21763, 4297];
-var supplementaryIdentifierCodes = [3834, 1, 3173, 7, 633, 9, 51450, 0, 3, 0, 8, 1, 6, 0];
+var bmpIdentifierStart = /[\p{ID_Start}\u0558\u058b\u058c\u088f\u0c5c\u0cdc\u208f\u209d-\u209f\ua7ce\ua7cf\ua7d2\ua7d4\ua7dd\ua7e2\ua7f1\uab6c\uab6d]/u;
+var bmpIdentifier = /[\p{ID_Continue}\u0558\u058b\u058c\u088f\u0c5c\u0cdc\u208f\u209d-\u209f\ua7ce\ua7cf\ua7d2\ua7d4\ua7dd\ua7e2\ua7f1\uab6c\uab6d\u05c8\u05c9\u0b53\u0b54\u1acf-\u1af0]/u;
+var supplementaryIdentifierStartCodes = [1979, 4, 385, 25, 1388, 2, 18, 21, 3100, 0, 678, 43, 22, 0, 1662, 0, 6, 10, 209, 310, 18458, 24, 3, 24, 287, 4, 6146, 7, 1239, 4, 47, 23, 96, 114, 14, 913, 15, 50, 8017, 5, 64, 0, 9534, 0, 2169, 5, 7, 86, 15, 6, 55, 50, 1729, 30, 2, 2, 2, 1, 2, 6, 3, 4, 10, 1, 53307, 5, 223, 0, 5764, 11, 21763, 4297, 39815, 11327];
+var supplementaryIdentifierCodes = [3787, 4, 33, 11, 3173, 7, 633, 9, 7, 0, 45879, 1, 296, 2, 9, 1, 3, 0, 33, 1, 5218, 0, 3, 0, 8, 1, 6, 0];
 function isInSupplementarySet(code2, set) {
   let pos = 65536;
   for (let i = 0, length = set.length; i < length; i += 2) {
@@ -4206,13 +4206,15 @@ var flow = (superClass) => class FlowParserMixin extends superClass {
     const arrows = [];
     while (stack.length !== 0) {
       const node2 = stack.pop();
-      if (node2.type === "ArrowFunctionExpression" && node2.body.type !== "BlockStatement") {
+      if (node2.type === "ArrowFunctionExpression") {
         if (node2.typeParameters || !node2.returnType) {
           this.finishArrowValidation(node2);
         } else {
           arrows.push(node2);
         }
-        stack.push(node2.body);
+        if (node2.body.type !== "BlockStatement") {
+          stack.push(node2.body);
+        }
       } else if (node2.type === "ConditionalExpression") {
         stack.push(node2.consequent);
         stack.push(node2.alternate);
@@ -5498,8 +5500,7 @@ var entities = {
   hearts: "\u2665",
   diams: "\u2666"
 };
-var lineBreak = /\r\n|[\r\n\u2028\u2029]/;
-var lineBreakG = new RegExp(lineBreak.source, "g");
+var lineBreakG = /\r\n|[\r\n\u2028\u2029]/g;
 function isNewLine(code2) {
   switch (code2) {
     case 10:
@@ -6678,12 +6679,12 @@ function readInt(input, pos, lineStart, curLine, radix, len, forceLen, allowNumS
       val = Infinity;
     }
     if (val >= radix) {
-      if (val <= 9 && bailOnError) {
-        return {
+      if (val <= 9) {
+        if (bailOnError) return {
           n: null,
           pos
         };
-      } else if (val <= 9 && errors.invalidDigit(pos, lineStart, curLine, radix)) {
+        errors.invalidDigit(pos, lineStart, curLine, radix);
         val = 0;
       } else if (forceLen) {
         val = 0;
@@ -7692,11 +7693,9 @@ var Tokenizer = class extends CommentsParser {
   }
   errorHandlers_readInt = {
     invalidDigit: (pos, lineStart, curLine, radix) => {
-      if (!(this.optionFlags & 4096)) return false;
       this.raise(Errors.InvalidDigit, buildPosition(pos, lineStart, curLine), {
         radix
       });
-      return true;
     },
     numericSeparatorInEscapeSequence: this.errorBuilder(Errors.NumericSeparatorInEscapeSequence),
     unexpectedNumericSeparator: this.errorBuilder(Errors.UnexpectedNumericSeparator)
@@ -14822,6 +14821,9 @@ var typescript = (superClass) => class TypeScriptParserMixin extends superClass 
   }
   fillOptionalPropertiesForTSESLint(node) {
     switch (node.type) {
+      case "ImportDeclaration":
+        node.phase ??= null;
+        return;
       case "ExpressionStatement":
         node.directive ??= void 0;
         return;
@@ -16147,7 +16149,13 @@ function reviewRuns(rows) {
       fail("local-review run supersession chain is incomplete or forked");
     }
     seen.set(id, { body, commentId });
-    runs.push({ id, commentId, base, maxRounds });
+    runs.push({
+      id,
+      commentId,
+      base,
+      tier,
+      maxRounds
+    });
   }
   return runs;
 }
@@ -16228,16 +16236,22 @@ function readResultRecovery(params, actor) {
   const blocked = validateResultData(params, value["blockedResult"]);
   if (blocked.status !== "blocked")
     fail("result recovery must preserve a blocked result");
-  const candidate = validateResultData(
+  const savedCandidate = validateResultData(
     params,
     JSON.stringify(value["candidate"])
   );
-  if (candidate.status !== "clean" && candidate.status !== "changed") {
+  if (savedCandidate.status !== "clean" && savedCandidate.status !== "changed") {
     fail("result recovery requires a completed candidate");
   }
+  let candidate = savedCandidate.status === "changed" && savedCandidate.classification === "minor" && classifyRangeEffect(params.before, params.head) === "behavioral" ? { ...savedCandidate, classification: "material" } : savedCandidate;
   const current = Buffer.from(readResultBytes(params.resultFile)).toString(
     "utf8"
   );
+  const promotedCandidate = savedCandidate.status === "changed" && savedCandidate.classification === "minor" ? { ...savedCandidate, classification: "material" } : null;
+  const canonicalPromotion = promotedCandidate ? JSON.stringify(promotedCandidate, Object.keys(promotedCandidate).sort()) + "\n" : null;
+  if (promotedCandidate !== null && canonicalPromotion !== null && current === canonicalPromotion) {
+    candidate = promotedCandidate;
+  }
   const canonicalCandidate = JSON.stringify(candidate, Object.keys(candidate).sort()) + "\n";
   if (current !== value["blockedResult"] && current !== canonicalCandidate) {
     fail("result recovery no longer matches the saved result");
@@ -16574,6 +16588,9 @@ function transitionHeads(params) {
   });
   return heads;
 }
+function convergenceStartRound(repo, pr) {
+  return reviewRuns(getIssueComments(repo, pr)).at(-1)?.tier === "lean" ? 2 : 3;
+}
 function verifyResultEvidence(args, threads, options) {
   const data = options?.data ?? validateResultData(args, readResultBytes(args.resultFile));
   if (data.status !== "clean" && data.status !== "changed") {
@@ -16610,7 +16627,7 @@ function verifyResultEvidence(args, threads, options) {
   if (!evidence.some(([, hasFix]) => hasFix)) {
     fail("changed review results require a fixed ledger finding");
   }
-  if (args.round >= 3 && evidence.some(([, , , hasNonblockingFix]) => hasNonblockingFix)) {
+  if (args.round >= convergenceStartRound(args.repo, args.pr) && evidence.some(([, , , hasNonblockingFix]) => hasNonblockingFix)) {
     fail("convergence review results cannot fix non-blocking findings");
   }
   return data;
@@ -16645,8 +16662,9 @@ function writeResult(params) {
   if (!changed && params.classification !== void 0) {
     fail("clean review result cannot have a classification");
   }
-  if (changed && params.round >= 3 && params.classification !== "material") {
-    fail("round 3+ changed review results require material classification");
+  const convergence = params.round >= convergenceStartRound(params.repo, params.pr);
+  if (changed && convergence && params.classification !== "material") {
+    fail("convergence changed review results require material classification");
   }
   if (changed && dispositions.length === 0) {
     fail("changed review results require ledger evidence");
@@ -16654,7 +16672,7 @@ function writeResult(params) {
   if (changed && !dispositions.some(([, hasFix]) => hasFix)) {
     fail("changed review results require a fixed ledger finding");
   }
-  if (changed && params.round >= 3 && dispositions.some(([, , , hasNonblockingFix]) => hasNonblockingFix)) {
+  if (changed && convergence && dispositions.some(([, , , hasNonblockingFix]) => hasNonblockingFix)) {
     fail("convergence review results cannot fix non-blocking findings");
   }
   const value = {
@@ -16701,7 +16719,10 @@ function recoverResult(params) {
     data: candidate,
     historicalCommentIds
   });
-  readResultRecovery(params, actor);
+  const confirmed = readResultRecovery(params, actor);
+  if (confirmed.classification !== candidate.classification) {
+    fail("result recovery classification changed during finalization");
+  }
   verifyHead(params.repo, params.pr, params.head);
   writeResultFile(params.resultFile, { ...candidate });
   return {
@@ -17286,6 +17307,7 @@ function verifyLedger(params) {
 
 // src/changeset.ts
 var CHANGESET_CLASSIFIER_VERSION = 1;
+var SMALL_CHANGE_LINE_LIMIT = 20;
 var DEFAULT_PROMPT_SURFACES = [
   ".claude/",
   ".codex/",
@@ -17321,12 +17343,8 @@ var GENERATED_PREFIXES = [
   "target/release/"
 ];
 var GENERATED_SEGMENTS = ["/dist/", "/build/", "/vendor/"];
-var CONFIG_BASENAMES = /* @__PURE__ */ new Set([
+var DEPENDENCY_MANIFEST_BASENAMES = /* @__PURE__ */ new Set([
   "package.json",
-  "pnpm-workspace.yaml",
-  "lerna.json",
-  "turbo.json",
-  "nx.json",
   "pyproject.toml",
   "setup.py",
   "setup.cfg",
@@ -17338,7 +17356,14 @@ var CONFIG_BASENAMES = /* @__PURE__ */ new Set([
   "pom.xml",
   "build.gradle",
   "build.gradle.kts",
-  "composer.json",
+  "composer.json"
+]);
+var CONFIG_BASENAMES = /* @__PURE__ */ new Set([
+  ...DEPENDENCY_MANIFEST_BASENAMES,
+  "pnpm-workspace.yaml",
+  "lerna.json",
+  "turbo.json",
+  "nx.json",
   "dockerfile",
   "docker-compose.yml",
   "docker-compose.yaml",
@@ -17348,6 +17373,27 @@ var CONFIG_BASENAMES = /* @__PURE__ */ new Set([
   ".gitlab-ci.yml",
   ".platform-config.yml"
 ]);
+var REQUIREMENTS_FILE = /^requirements(-[^.]+)?\.txt$/;
+var SMALL_CHANGE_DEPENDENCY_BASENAMES = /* @__PURE__ */ new Set([
+  "pnpm-workspace.yaml",
+  "bun.lock",
+  "deno.json",
+  "deno.jsonc",
+  "deno.lock",
+  "pipfile",
+  "pipfile.lock",
+  ".terraform.lock.hcl",
+  "mix.exs",
+  "mix.lock",
+  "package.swift",
+  "package.resolved",
+  "packages.lock.json",
+  "gradle.lockfile",
+  "go.work",
+  "go.work.sum",
+  ".gitmodules"
+]);
+var GITLINK_HEADER = /^(?:index [0-9a-f]+\.\.[0-9a-f]+|new file mode|deleted file mode|old mode|new mode) 160000$/;
 var CONFIG_PREFIXES = [
   ".github/workflows/",
   ".github/actions/",
@@ -17479,14 +17525,33 @@ function hasSegment(path, segments) {
 function isGenerated(path, name) {
   return GENERATED_BASENAMES.has(name) || hasPrefix(path, GENERATED_PREFIXES) || hasSegment(path, GENERATED_SEGMENTS) || /\.min\.(js|css)$/.test(name) || /\.bundle\.(js|mjs|cjs)$/.test(name) || /\.generated\.[^.]+$/.test(name) || /\.snap$/.test(name) || /\.pb\.go$/.test(name) || /_pb2(_grpc)?\.py$/.test(name) || /\.g\.dart$/.test(name);
 }
+function isTestName(name) {
+  return TEST_BASENAMES.has(name) || /\.(test|spec)\.[^.]+$/.test(name) || /_test\.(go|py|rb)$/.test(name);
+}
 function isTest(path, name) {
-  return TEST_BASENAMES.has(name) || hasPrefix(path, TEST_PREFIXES) || hasSegment(path, TEST_SEGMENTS) || /\.(test|spec)\.[^.]+$/.test(name) || /_test\.(go|py|rb)$/.test(name);
+  return isTestName(name) || hasPrefix(path, TEST_PREFIXES) || hasSegment(path, TEST_SEGMENTS);
+}
+function isPromptSurface2(path, promptSurfaces) {
+  return promptSurfaces.some(
+    (surface) => path === surface || surface.endsWith("/") && path.startsWith(surface) || path.endsWith(`/${surface}`)
+  );
 }
 function isFixture(path, name) {
   return /\.fixture\.[^.]+$/.test(name) || path.startsWith("fixtures/") || path.includes("/fixtures/");
 }
 function isConfig(path, name, extension) {
-  return CONFIG_BASENAMES.has(name) || CONFIG_EXTENSIONS.has(extension) || hasPrefix(path, CONFIG_PREFIXES) || hasSegment(path, CONFIG_SEGMENTS) || /^dockerfile(\.|$)/.test(name) || /^tsconfig(\.[^.]+)?\.json$/.test(name) || /^requirements(-[^.]+)?\.txt$/.test(name);
+  return CONFIG_BASENAMES.has(name) || CONFIG_EXTENSIONS.has(extension) || hasPrefix(path, CONFIG_PREFIXES) || hasSegment(path, CONFIG_SEGMENTS) || /^dockerfile(\.|$)/.test(name) || /^tsconfig(\.[^.]+)?\.json$/.test(name) || REQUIREMENTS_FILE.test(name);
+}
+function isDependencyFile(path) {
+  const name = basename(normalizePath(path)).toLowerCase();
+  return GENERATED_BASENAMES.has(name) || DEPENDENCY_MANIFEST_BASENAMES.has(name) || SMALL_CHANGE_DEPENDENCY_BASENAMES.has(name) || REQUIREMENTS_FILE.test(name);
+}
+function isSourceUnderTestPath(path, promptSurfaces) {
+  const name = basename(path).toLowerCase();
+  if (isTestName(name)) {
+    return false;
+  }
+  return isPromptSurface2(path, promptSurfaces) || !isFixture(path, name) && isConfig(path, name, extensionOf2(path));
 }
 function isDocs(path, name, extension) {
   return DOCS_BASENAMES.has(name) || DOCS_EXTENSIONS.has(extension) || hasPrefix(path, DOCS_PREFIXES) || hasSegment(path, DOCS_SEGMENTS);
@@ -17504,9 +17569,7 @@ function classifyPath(rawPath, options) {
   if (isTest(path, name)) {
     return classify("test", true);
   }
-  if (promptSurfaces.some(
-    (surface) => path === surface || surface.endsWith("/") && path.startsWith(surface) || path.endsWith(`/${surface}`)
-  )) {
+  if (isPromptSurface2(path, promptSurfaces)) {
     return classify("app", true);
   }
   if (isFixture(path, name)) {
@@ -17539,6 +17602,9 @@ function emptyChangeset() {
 function classifyFiles(files, options) {
   const changeset = emptyChangeset();
   const classifications = [];
+  let unsizedFiles = 0;
+  let smallChangeLines = 0;
+  const promptSurfaces = options?.promptSurfaces ?? DEFAULT_PROMPT_SURFACES;
   for (const file of files) {
     const classification = classifyPath(file.path, options);
     classifications.push(classification);
@@ -17558,6 +17624,12 @@ function classifyFiles(files, options) {
       fail(`changed file ${file.path} reports an invalid blank count`);
     }
     const counted = churn - blank;
+    if (isDependencyFile(file.path) || file.submodule === true || classification.reviewSignificant && churn === 0) {
+      unsizedFiles += 1;
+    }
+    if (classification.class === "app" || classification.class === "test" && isSourceUnderTestPath(classification.path, promptSurfaces)) {
+      smallChangeLines += counted;
+    }
     changeset.linesChanged.blank += blank;
     changeset.linesChanged[classification.class] += counted;
     if (classification.class !== "generated" && classification.language) {
@@ -17569,7 +17641,9 @@ function classifyFiles(files, options) {
     changeset,
     classifications,
     reviewSignificantFiles: changeset.reviewSignificantFiles,
-    skip: changeset.reviewSignificantFiles === 0
+    skip: changeset.reviewSignificantFiles === 0,
+    smallChange: changeset.reviewSignificantFiles > 0 && unsizedFiles === 0 && smallChangeLines < SMALL_CHANGE_LINE_LIMIT,
+    smallChangeLines
   };
 }
 function unquotePath(raw) {
@@ -17690,6 +17764,10 @@ function parseDiffPatch(patch) {
     if (current === null) {
       continue;
     }
+    if (!inHunk && GITLINK_HEADER.test(rawLine)) {
+      current.submodule = true;
+      continue;
+    }
     if (!inHunk && rawLine.startsWith("--- ")) {
       const left = stripSide(rawLine.slice(4).trim());
       if (left !== null) {
@@ -17763,6 +17841,10 @@ function classifyRange(params) {
     "--no-color",
     "--no-ext-diff",
     "--find-renames",
+    // A clone configured with `diff.submodule=log` would otherwise print a
+    // gitlink change with no file record, and the range would lose it.
+    "--submodule=short",
+    "--ignore-submodules=none",
     `${params.base}..${params.head}`
   ]);
   return classifyFiles(parseDiffPatch(patch), params.options);
@@ -17833,10 +17915,10 @@ function validateProviderBuckets(value) {
   }
   return buckets;
 }
-function validateTokenBucket(value) {
+function validateTokenBucket(value, allowUnknownModel = false) {
   const source = requireObject(value, "tokens[]");
   const model = source["model"];
-  if (typeof model !== "string" || !TOKEN_RE.test(model)) {
+  if (!(allowUnknownModel && model === null) && (typeof model !== "string" || !TOKEN_RE.test(model))) {
     fail("telemetry tokens[].model must be a protocol token");
   }
   return {
@@ -18011,8 +18093,8 @@ function telemetryIdempotencyKey(fields) {
 }
 function validateTelemetryRecord(value) {
   const source = requireObject(value, "record");
-  if (source["version"] !== TELEMETRY_VERSION) {
-    fail(`telemetry record version must be ${TELEMETRY_VERSION}`);
+  if (source["version"] !== TELEMETRY_VERSION && source["version"] !== 3) {
+    fail("telemetry record version must be 1 or 3");
   }
   const emittedAt = source["emittedAt"];
   if (typeof emittedAt !== "string" || !UTC_TIMESTAMP_RE.test(emittedAt) || Number.isNaN(Date.parse(emittedAt)) || new Date(emittedAt).toISOString().replace(".000Z", "Z") !== emittedAt) {
@@ -18062,7 +18144,14 @@ function validateTelemetryRecord(value) {
   if (!Array.isArray(rawTokens)) {
     fail("telemetry tokens must be an array");
   }
-  const tokens = rawTokens.map(validateTokenBucket);
+  const tokens = rawTokens.map(
+    (bucket) => validateTokenBucket(bucket, source["version"] === 3)
+  );
+  if (source["version"] === 3 && (tokens.length !== 1 || tokens[0]?.model !== null || tokens[0].effort !== null)) {
+    fail(
+      "unattributed telemetry must be one aggregate bucket with unknown effort"
+    );
+  }
   const models = tokens.map(
     (bucket) => JSON.stringify([bucket.model, bucket.effort])
   );
@@ -18093,7 +18182,7 @@ function validateTelemetryRecord(value) {
   }
   const validated = {
     ...source,
-    version: TELEMETRY_VERSION,
+    version: source["version"],
     emittedAt,
     repo,
     pr,
@@ -18138,16 +18227,19 @@ function validateTelemetryRecord(value) {
   return validated;
 }
 function tokenBucketFrom(bucket) {
-  return validateTokenBucket({
-    model: bucket.model,
-    effort: bucket.effort ?? null,
-    input: bucket.input ?? null,
-    output: bucket.output ?? null,
-    cacheRead: bucket.cacheRead ?? null,
-    cacheWrite: bucket.cacheWrite ?? null,
-    reasoning: bucket.reasoning ?? null,
-    providerBuckets: bucket.providerBuckets ?? {}
-  });
+  return validateTokenBucket(
+    {
+      model: bucket.model,
+      effort: bucket.effort ?? null,
+      input: bucket.input ?? null,
+      output: bucket.output ?? null,
+      cacheRead: bucket.cacheRead ?? null,
+      cacheWrite: bucket.cacheWrite ?? null,
+      reasoning: bucket.reasoning ?? null,
+      providerBuckets: bucket.providerBuckets ?? {}
+    },
+    true
+  );
 }
 function laneFrom(lane) {
   return validateLane({
@@ -18189,7 +18281,7 @@ function buildTelemetryRecord(params) {
     runId: params.runId
   });
   return validateTelemetryRecord({
-    version: TELEMETRY_VERSION,
+    version: tokens.some((bucket) => bucket.model === null) ? 3 : TELEMETRY_VERSION,
     emittedAt: params.emittedAt,
     repo: params.repo,
     pr: params.pr,
@@ -18218,8 +18310,7 @@ function buildTelemetryRecord(params) {
 }
 function knownTelemetryRecord(value) {
   const record = validateTelemetryRecord(value);
-  return {
-    version: record.version,
+  const fields = {
     emittedAt: record.emittedAt,
     repo: record.repo,
     pr: record.pr,
@@ -18245,11 +18336,12 @@ function knownTelemetryRecord(value) {
     changeset: record.changeset,
     findings: record.findings
   };
+  return record.version === 1 ? { ...fields, version: 1, tokens: record.tokens } : { ...fields, version: 3, tokens: record.tokens };
 }
 function buildTelemetryBody(record) {
   const safeRecord = knownTelemetryRecord(record);
   return [
-    TELEMETRY_V1_MARKER,
+    `<!-- local-review-telemetry:v${safeRecord.version} -->`,
     "",
     "```json",
     JSON.stringify(safeRecord, null, 2),
@@ -18264,20 +18356,23 @@ function matchTelemetry(body) {
   if (prefixIndex !== body.lastIndexOf(TELEMETRY_MARKER_PREFIX)) {
     fail("a comment carries more than one local-review telemetry marker");
   }
-  const markerIndex = body.indexOf(TELEMETRY_V1_MARKER);
-  if (markerIndex === -1) {
+  const marker = body.match(/<!-- local-review-telemetry:v([13]) -->/);
+  if (!marker || marker.index === void 0) {
     fail("local-review telemetry record is of an unsupported version");
   }
-  const payload = body.slice(markerIndex + TELEMETRY_V1_MARKER.length).replace(/^\s*```(?:json)?\s*\n/, "").replace(/\n```\s*$/, "").trim();
+  const payload = body.slice(marker.index + marker[0].length).replace(/^\s*```(?:json)?\s*\n/, "").replace(/\n```\s*$/, "").trim();
   if (payload === "") {
     fail("local-review telemetry record carries no payload");
   }
-  return validateTelemetryRecord(
+  const record = validateTelemetryRecord(
     parseJsonOrFail(
       payload,
       "local-review telemetry payload is not valid JSON"
     )
   );
+  if (record.version !== Number(marker[1]))
+    fail("telemetry marker and payload versions must match");
+  return record;
 }
 function canonicalJson(value) {
   if (value === void 0) {
@@ -18316,7 +18411,7 @@ function prCommentSink(target) {
       const rows = getIssueComments(target.repo, target.pr, actor);
       for (const row of rows) {
         const existing = String(row["body"] ?? "");
-        if (!existing.includes(TELEMETRY_V1_MARKER)) {
+        if (!isTelemetryComment(existing)) {
           continue;
         }
         let parsed;
@@ -19602,6 +19697,9 @@ function runCliCommand(argv) {
       writeSortedJson({
         ...report.changeset,
         skip: report.skip,
+        smallChange: report.smallChange,
+        smallChangeLines: report.smallChangeLines,
+        smallChangeLimit: SMALL_CHANGE_LINE_LIMIT,
         reviewSignificantFiles: report.reviewSignificantFiles,
         classifications: report.classifications
       });
