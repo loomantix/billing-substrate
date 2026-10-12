@@ -1,60 +1,165 @@
 #!/usr/bin/env python3
-"""Create a verified commit via the GitHub Contents API.
+"""Create a GitHub-verified commit via the Git Database API.
 
-Vendored fork — reads change-set from a manifest produced by an upstream
-Job A and reads upsert contents from a payload directory, rather than
-calling `git status` against a local working tree. This decoupling is
-what lets Job B run *without* executing any upstream-cloned code.
+Replaces `git commit` + `git push` in the upstream-sync workflow.
+Commits created via the API endpoints (`git/blobs`, `git/trees`,
+`git/commits`, `git/refs`) can be signed by GitHub when invoked with
+a GitHub App installation token. This helper verifies that result before
+publishing the branch, supporting repositories that require attested bot
+commits without claiming that one mechanism satisfies an audit framework.
 
-Commits created via the Contents API (`git/blobs`, `git/trees`,
-`git/commits`, `git/refs`) are auto-signed by GitHub when invoked with a
-GitHub App installation token — committer is `GitHub`, `verified: true`.
+Why this exists:
+- `git commit` from inside a workflow runner produces unsigned commits
+  attributed to `github-actions[bot]`. Repositories may require stronger
+  cryptographic attribution for their own change-control policy.
+- The same workflow using the Git Database API + a GitHub App installation
+  token can produce commits signed and attributed to the App identity.
+
+Usage (called from sync-from-upstream.yml after the sync engine writes
+files to the consumer working tree):
+
+    python3 create-signed-commit.py \\
+        --owner <owner> --repo <repo> \\
+        --base-branch <branch> \\
+        --new-branch <branch> \\
+        --message "<commit message>" \\
+        --consumer-dir <path> \\
+        --token-env GH_APP_TOKEN
+
+Inputs:
+- The consumer working directory has the modifications already on disk
+  (the sync engine already wrote them).
+- The token-env var holds an App installation token (generated upstream
+  via actions/create-github-app-token).
+
+Outputs:
+- A new branch ref pointing at a signed commit. The workflow then opens
+  a PR against that branch.
+
+Exit codes: 0 on success, 1 on API error, 2 on bad invocation.
 """
-
 from __future__ import annotations
 
 import argparse
 import base64
 import json
 import os
+import posixpath
+import re
+import subprocess
 import sys
-import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, NamedTuple
-
-# GitHub's blob endpoint rejects payloads over 100MB. Fail fast at 50MB
-# with a clear message rather than emitting a confusing API error.
-MAX_BLOB_BYTES = 50 * 1024 * 1024
-
-# Bounded retry for transient network/5xx errors. The sync workflow
-# fires daily; a single transient blip shouldn't fail the whole run.
-RETRY_HTTP_STATUS = {500, 502, 503, 504}
-RETRY_MAX_ATTEMPTS = 3
-RETRY_BASE_DELAY_S = 1.5
-
+from typing import Any, NamedTuple, cast
 
 class StatusChanges(NamedTuple):
-    """Result of `parse_manifest`: paths to upsert + paths to delete."""
+    """Result of `parse_status`: paths to upsert + paths to delete."""
 
     upserts: list[str]
     deletes: list[str]
 
 
-def _is_safe_repo_path(path: str) -> bool:
-    """Reject absolute paths and any `..` component — defense in depth.
+def glob_to_regex(pattern: str) -> re.Pattern[str]:
+    """Compile the sync engine's gitignore-flavored destination glob."""
+    parts: list[str] = []
+    i = 0
+    while i < len(pattern):
+        char = pattern[i]
+        if char == "*" and i + 1 < len(pattern) and pattern[i + 1] == "*":
+            if i + 2 < len(pattern) and pattern[i + 2] == "/":
+                parts.append("(?:.*/)?")
+                i += 3
+            else:
+                parts.append(".*")
+                i += 2
+        elif char == "*":
+            parts.append("[^/]*")
+            i += 1
+        elif char == "?":
+            parts.append("[^/]")
+            i += 1
+        else:
+            parts.append(re.escape(char))
+            i += 1
+    return re.compile(r"\A" + "".join(parts) + r"\Z")
 
-    The manifest is produced by untrusted Job A. Even though `git status`
-    output shouldn't contain absolute paths or `..`, the GitHub API would
-    otherwise be the only line of defense for delete entries. Apply the
-    same shape-check to upserts and deletes so the script never asks the
-    API to operate on a path the consumer maintainer can't see in PR diff.
-    """
-    if not path or path.startswith("/"):
-        return False
-    parts = path.replace("\\", "/").split("/")
-    return ".." not in parts
+
+def _canonical_manifest_path(path: str) -> str | None:
+    """Return a canonical repository-relative path, or None when unsafe."""
+    normalized = posixpath.normpath(path)
+    if (
+        not path
+        or not path.isprintable()
+        or "\\" in path
+        or path.startswith("/")
+        or normalized in (".", "..")
+        or normalized.startswith("../")
+        or normalized != path
+    ):
+        return None
+    return normalized
+
+
+def validate_payload_paths(
+    changes: StatusChanges,
+    config_path: Path,
+) -> StatusChanges:
+    """Fail closed unless every payload path is trusted by the consumer config."""
+    try:
+        import yaml
+    except ImportError as error:
+        sys.stderr.write("PyYAML is required to validate payload-mode consumer allowlists.\n")
+        raise ValueError("missing PyYAML") from error
+    if not config_path.is_file() or config_path.is_symlink():
+        sys.stderr.write(f"consumer config file not found: {config_path}\n")
+        raise ValueError("missing consumer config")
+    document: object = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(document, dict):
+        sys.stderr.write(f"{config_path}: top-level YAML document must be a mapping\n")
+        raise ValueError("invalid consumer config")
+    allowed = document.get("allowed_destinations")
+    if not isinstance(allowed, list) or not allowed or not all(
+        isinstance(pattern, str) and pattern for pattern in allowed
+    ):
+        sys.stderr.write(
+            f"{config_path}: payload mode requires a non-empty `allowed_destinations` string list\n"
+        )
+        raise ValueError("invalid consumer allowlist")
+    patterns = [glob_to_regex(pattern) for pattern in allowed]
+    skip = document.get("skip_targets") or []
+    if not isinstance(skip, list) or not all(isinstance(path, str) for path in skip):
+        sys.stderr.write(f"{config_path}: `skip_targets` must be a list of strings\n")
+        raise ValueError("invalid skip list")
+    skipped_paths = set(skip)
+    canonical_upserts: list[str] = []
+    canonical_deletes: list[str] = []
+    for source, destination in (
+        (changes.upserts, canonical_upserts),
+        (changes.deletes, canonical_deletes),
+    ):
+        for path in source:
+            canonical = _canonical_manifest_path(path)
+            if canonical is None:
+                sys.stderr.write(f"unsafe manifest path: {path!r}\n")
+                raise ValueError("unsafe manifest path")
+            if not any(pattern.match(canonical) is not None for pattern in patterns):
+                sys.stderr.write(f"manifest path is not allowed by consumer config: {canonical}\n")
+                raise ValueError("disallowed manifest path")
+            if canonical in skipped_paths:
+                sys.stderr.write(f"manifest path is opted out by consumer config: {canonical}\n")
+                raise ValueError("skipped manifest path")
+            destination.append(canonical)
+    return StatusChanges(upserts=canonical_upserts, deletes=canonical_deletes)
+
+
+def run(*args: str, cwd: Path | None = None) -> str:
+    """Run a shell command and return stdout. Exit on failure."""
+    res = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
+    if res.returncode != 0:
+        sys.stderr.write(f"command failed ({res.returncode}): {' '.join(args)}\n{res.stderr}")
+        sys.exit(1)
+    return res.stdout
 
 
 def _github_request(
@@ -62,12 +167,14 @@ def _github_request(
     path: str,
     token: str,
     body: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    """Internal: issue a GitHub REST request. Returns parsed JSON, or raises HTTPError / URLError.
+) -> dict[str, Any]:
+    """Internal: issue a GitHub REST request. Returns parsed JSON, or raises HTTPError.
 
     Callers should use `github_api` (errors are fatal) or `github_api_optional`
     (404 returns None, other errors fatal) — both surface a clear contract at
-    the call site.
+    the call site. The Git Database API endpoints this script hits always return
+    JSON objects; a non-object response is treated as a hard error here so
+    callers can rely on a `dict[str, Any]` shape downstream.
     """
     url = f"https://api.github.com{path}"
     data = json.dumps(body).encode() if body is not None else None
@@ -80,53 +187,23 @@ def _github_request(
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, method=method, data=data, headers=headers)
     # Bound network wait — a hung connection on the runner shouldn't
-    # consume the entire job's timeout-minutes.
+    # consume the entire workflow timeout (5 min default).
     with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read())
-
-
-def _request_with_retry(
-    method: str,
-    path: str,
-    token: str,
-    body: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    """Wrap `_github_request` with bounded retry on 5xx + URLError."""
-    last_exc: Exception | None = None
-    for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
-        try:
-            return _github_request(method, path, token, body)
-        except urllib.error.HTTPError as e:
-            if e.code in RETRY_HTTP_STATUS and attempt < RETRY_MAX_ATTEMPTS:
-                last_exc = e
-                sys.stderr.write(
-                    f"GitHub API {method} {path}: {e.code} (attempt {attempt}/{RETRY_MAX_ATTEMPTS}); retrying\n"
-                )
-                time.sleep(RETRY_BASE_DELAY_S * attempt)
-                continue
-            raise
-        except urllib.error.URLError as e:
-            if attempt < RETRY_MAX_ATTEMPTS:
-                last_exc = e
-                sys.stderr.write(
-                    f"GitHub API {method} {path}: network error {e.reason!r} (attempt {attempt}/{RETRY_MAX_ATTEMPTS}); retrying\n"
-                )
-                time.sleep(RETRY_BASE_DELAY_S * attempt)
-                continue
-            sys.stderr.write(f"GitHub API {method} {path}: network error after {RETRY_MAX_ATTEMPTS} attempts: {e.reason!r}\n")
-            sys.exit(1)
-    # Defensive: should be unreachable since the loop either returns or raises.
-    if last_exc is not None:
-        raise last_exc
-    raise RuntimeError("unreachable: retry loop exited without returning or raising")
+        parsed = json.loads(resp.read())
+    if not isinstance(parsed, dict):
+        sys.stderr.write(
+            f"GitHub API {method} {path}: expected JSON object, got {type(parsed).__name__}\n"
+        )
+        sys.exit(1)
+    return cast(dict[str, Any], parsed)
 
 
 def _exit_on_http_error(method: str, path: str, e: urllib.error.HTTPError) -> None:
     sys.stderr.write(f"GitHub API {method} {path}: {e.code} {e.reason}\n")
     try:
         sys.stderr.write(e.read().decode() + "\n")
-    except (UnicodeDecodeError, OSError) as body_err:
-        sys.stderr.write(f"<could not decode error body: {type(body_err).__name__}: {body_err}>\n")
+    except Exception:
+        pass
     sys.exit(1)
 
 
@@ -138,12 +215,10 @@ def github_api(
 ) -> dict[str, Any]:
     """Issue a GitHub REST request. Returns parsed JSON. Exits on any error."""
     try:
-        result = _request_with_retry(method, path, token, body)
+        return _github_request(method, path, token, body)
     except urllib.error.HTTPError as e:
         _exit_on_http_error(method, path, e)
         raise  # unreachable; satisfies the type checker
-    assert result is not None  # _github_request only returns None when raising
-    return result
 
 
 def github_api_optional(
@@ -154,7 +229,7 @@ def github_api_optional(
 ) -> dict[str, Any] | None:
     """Issue a GitHub REST request. Returns None on 404. Exits on other errors."""
     try:
-        return _request_with_retry(method, path, token, body)
+        return _github_request(method, path, token, body)
     except urllib.error.HTTPError as e:
         if e.code == 404:
             return None
@@ -162,14 +237,8 @@ def github_api_optional(
         raise  # unreachable; satisfies the type checker
 
 
-def parse_manifest(manifest_path: Path) -> StatusChanges:
-    """Return (upserts, deletes) from `git status --porcelain=v1 -z -uall` bytes.
-
-    Renames (R) emit upsert(new) + delete(old) so `base_tree` doesn't
-    preserve the old path. Copies (C) emit upsert(new) only. R/C with an
-    empty source path is a manifest corruption and aborts the script.
-    """
-    raw = manifest_path.read_bytes().decode("utf-8", errors="surrogateescape")
+def parse_status_bytes(raw: str) -> StatusChanges:
+    """Return (modified_or_added, deleted) file paths parsed from porcelain -z output."""
     if not raw:
         return StatusChanges(upserts=[], deletes=[])
 
@@ -183,23 +252,28 @@ def parse_manifest(manifest_path: Path) -> StatusChanges:
         i += 1
         if not entry:
             continue
+        # Format: "XY path" — XY are the 2-char status codes; path is at
+        # column 3. With -z, paths are never quoted.
         code = entry[:2]
         path = entry[3:]
 
+        # Renames (R) and copies (C) are followed by a separate
+        # NUL-terminated string carrying the source path. Consume it.
         if "R" in code or "C" in code:
-            if i >= len(parts):
-                raise ValueError(f"manifest corruption: {code!r} entry has no source path")
-            old_path = parts[i]
+            old_path = parts[i] if i < len(parts) else ""
             i += 1
-            if not old_path:
-                raise ValueError(f"manifest corruption: {code!r} entry has empty source path for {path!r}")
             upserts.append(path)
-            if "R" in code:
+            if "R" in code and old_path:
+                # Pure rename: source path is removed from the new tree.
                 deletes.append(old_path)
+            # For copies (C), the source stays in place — no delete.
             continue
 
-        # Trust the status code — re-checking via `.exists()` would TOCTOU-
-        # misclassify a recreated path as an upsert.
+        # Trust the git status code: `D` is a delete regardless of whether
+        # the file currently exists on disk. Re-checking `.exists()` here
+        # introduced a TOCTOU window where a recreated file would be
+        # misclassified as an upsert and re-uploaded to the tree instead
+        # of removed from it.
         if "D" in code:
             deletes.append(path)
         else:
@@ -208,24 +282,20 @@ def parse_manifest(manifest_path: Path) -> StatusChanges:
     return StatusChanges(upserts=upserts, deletes=deletes)
 
 
-def derive_signoff_trailer(app_slug: str) -> str:
-    """Build `Signed-off-by: <slug>[bot] <<slug>[bot]@users.noreply.github.com>`.
+def parse_status(consumer_dir: Path) -> StatusChanges:
+    """Return (modified_or_added, deleted) file paths relative to consumer_dir."""
+    raw = run("git", "status", "--porcelain=v1", "-z", "-uall", cwd=consumer_dir)
+    return parse_status_bytes(raw)
 
-    The bot's numeric user id is omitted — the DCO regex accepts the
-    slug-only form, and `GET /app` / `GET /user` aren't callable with an
-    installation token to fetch it.
-    """
+
+def derive_signoff_trailer(app_slug: str) -> str:
+    """Build a `Signed-off-by:` trailer for the App's identity."""
     name = f"{app_slug}[bot]"
     return f"Signed-off-by: {name} <{name}@users.noreply.github.com>"
 
 
 def with_signoff(message: str, trailer: str) -> str:
-    """Append a Signed-off-by trailer if not already present.
-
-    Idempotent: if the caller already supplied a `Signed-off-by:` line in
-    `--message`, returns the message unchanged. Otherwise appends with a
-    blank-line separator so the trailer parses as a footer.
-    """
+    """Append a Signed-off-by trailer if not already present."""
     if "Signed-off-by:" in message:
         return message
     return f"{message.rstrip()}\n\n{trailer}\n"
@@ -238,17 +308,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--base-branch", required=True, help="branch to fork the sync commit from")
     p.add_argument("--new-branch", required=True, help="branch to create with the new commit")
     p.add_argument("--message", required=True, help="commit message")
+    p.add_argument("--payload-dir", default=None, type=Path, help="path to extracted payload tree directory")
+    p.add_argument("--manifest", default=None, type=Path, help="path to status manifest file")
+    p.add_argument("--base-sha-file", default=None, type=Path, help="path to file containing expected base SHA")
+    p.add_argument("--expected-base-sha", default=None, help="expected base commit SHA")
+    p.add_argument("--consumer-dir", default=None, type=Path, help="path to consumer git working directory")
     p.add_argument(
-        "--payload-dir",
-        required=True,
+        "--config",
+        default=None,
         type=Path,
-        help="extracted post-sync working tree from Job A — upsert paths are read relative to this dir",
-    )
-    p.add_argument(
-        "--manifest",
-        required=True,
-        type=Path,
-        help="path to the `git status --porcelain=v1 -z -uall` bytes captured by Job A",
+        help="trusted consumer config; required with --payload-dir/--manifest",
     )
     p.add_argument("--token-env", default="GH_APP_TOKEN", help="env var holding the App installation token")
     p.add_argument(
@@ -271,90 +340,95 @@ def main() -> int:
         sys.stderr.write(f"missing token in env var {args.token_env}\n")
         return 2
 
-    # An empty/whitespace --app-slug would produce `[bot] <[bot]@…>` —
-    # passes the DCO regex but attributes the commit to a non-existent
-    # bot. Reject up front; the workflow always has a real slug or omits
-    # the flag entirely.
-    app_slug = args.app_slug.strip() if args.app_slug else None
-    if args.app_slug is not None and not app_slug:
-        sys.stderr.write("--app-slug, when given, must be non-empty\n")
-        return 2
-
-    payload_dir = args.payload_dir.resolve()
-    if not payload_dir.is_dir():
-        sys.stderr.write(f"--payload-dir is not a directory: {payload_dir}\n")
-        return 2
-    if not args.manifest.is_file():
-        sys.stderr.write(f"--manifest is not a file: {args.manifest}\n")
-        return 2
-
-    owner_repo = f"{args.owner}/{args.repo}"
-
-    # A typo / hostile caller passing --new-branch == --base-branch would
-    # force-PATCH main onto the sync commit at the end. Refuse.
+    # Refuse to force-update the base branch onto itself.
     if args.new_branch == args.base_branch:
         sys.stderr.write(
             f"refusing to operate: --new-branch and --base-branch are the same ({args.new_branch})\n"
         )
         return 2
 
-    try:
-        changes = parse_manifest(args.manifest)
-    except ValueError as e:
-        sys.stderr.write(f"❌ {e}\n")
-        return 1
+    payload_mode = args.payload_dir is not None or args.manifest is not None
+    consumer_mode = args.consumer_dir is not None
+    if payload_mode == consumer_mode:
+        sys.stderr.write(
+            "choose exactly one mode: --consumer-dir, or --payload-dir with --manifest and --config\n"
+        )
+        return 2
+    if payload_mode and (not args.payload_dir or not args.manifest or not args.config):
+        sys.stderr.write("payload mode requires --payload-dir, --manifest, and --config\n")
+        return 2
+
+    tree_dir = args.payload_dir.resolve() if args.payload_dir else args.consumer_dir.resolve()
+    owner_repo = f"{args.owner}/{args.repo}"
+
+    if payload_mode:
+        assert args.manifest is not None
+        assert args.config is not None
+        if not args.manifest.is_file():
+            sys.stderr.write(f"manifest file not found: {args.manifest}\n")
+            return 1
+        raw_manifest = args.manifest.read_text(encoding="utf-8", errors="surrogateescape")
+        try:
+            changes = validate_payload_paths(parse_status_bytes(raw_manifest), args.config)
+        except ValueError:
+            return 1
+    elif consumer_mode:
+        assert args.consumer_dir is not None
+        consumer_dir = args.consumer_dir.resolve()
+        changes = parse_status(consumer_dir)
+    else:
+        sys.stderr.write("either --manifest or --consumer-dir is required\n")
+        return 2
 
     if not changes.upserts and not changes.deletes:
         print("No changes to commit.")
         return 0
     print(f"Changes detected: {len(changes.upserts)} upsert, {len(changes.deletes)} delete")
 
+    expected_base_sha: str | None = None
+    if args.base_sha_file:
+        if not args.base_sha_file.is_file():
+            sys.stderr.write(f"base-sha file not found: {args.base_sha_file}\n")
+            return 1
+        expected_base_sha = args.base_sha_file.read_text(encoding="utf-8").strip()
+    elif args.expected_base_sha:
+        expected_base_sha = args.expected_base_sha.strip()
+
+    # 1. Resolve the base branch's HEAD commit + tree.
     base_ref = github_api("GET", f"/repos/{owner_repo}/git/ref/heads/{args.base_branch}", token)
     base_sha = base_ref["object"]["sha"]
+
+    if expected_base_sha and base_sha != expected_base_sha:
+        sys.stderr.write(
+            f"base branch {args.base_branch} HEAD {base_sha} has diverged from expected base {expected_base_sha}\n"
+        )
+        return 1
+
     base_commit = github_api("GET", f"/repos/{owner_repo}/git/commits/{base_sha}", token)
     base_tree_sha = base_commit["tree"]["sha"]
 
+    # 2. Build the tree-entry list:
     tree: list[dict[str, Any]] = []
 
     for path in changes.upserts:
-        if not _is_safe_repo_path(path):
-            sys.stderr.write(f"  ❌ upsert path rejected (absolute or contains '..'): {path}\n")
-            return 1
-        full = payload_dir / path
-        # OSError catches symlink loops (ELOOP), name-too-long, permission
-        # weirdness; ValueError catches the cross-boundary escape.
-        try:
-            full.resolve().relative_to(payload_dir)
-        except (ValueError, OSError) as e:
-            sys.stderr.write(f"  ❌ upsert path escapes payload dir or is unreadable: {path}: {type(e).__name__}: {e}\n")
-            return 1
-        if not full.is_file():
-            kind = "symlink" if full.is_symlink() else ("missing" if not full.exists() else "not-a-regular-file")
-            sys.stderr.write(f"  ❌ upsert path is {kind} in payload-dir: {path}\n")
+        full = tree_dir / path
+        if full.is_symlink() or not full.is_file() or not full.resolve().is_relative_to(tree_dir):
+            sys.stderr.write(f"  ❌ upsert path is not a regular file: {path}\n")
             return 1
         content = full.read_bytes()
-        if len(content) > MAX_BLOB_BYTES:
-            sys.stderr.write(
-                f"  ❌ upsert blob exceeds {MAX_BLOB_BYTES} bytes: {path} ({len(content)} bytes)\n"
-            )
-            return 1
         blob = github_api(
             "POST",
             f"/repos/{owner_repo}/git/blobs",
             token,
             {"content": base64.b64encode(content).decode("ascii"), "encoding": "base64"},
         )
-        # Preserve executable bit; `tar -czf` + `tar -xzf` round-trip the
-        # mode so X_OK on the extracted file reflects the source.
         mode = "100755" if os.access(full, os.X_OK) else "100644"
         tree.append({"path": path, "mode": mode, "type": "blob", "sha": blob["sha"]})
 
     for path in changes.deletes:
-        if not _is_safe_repo_path(path):
-            sys.stderr.write(f"  ❌ delete path rejected (absolute or contains '..'): {path}\n")
-            return 1
         tree.append({"path": path, "mode": "100644", "type": "blob", "sha": None})
 
+    # 3. Create the new tree
     new_tree = github_api(
         "POST",
         f"/repos/{owner_repo}/git/trees",
@@ -362,9 +436,10 @@ def main() -> int:
         {"base_tree": base_tree_sha, "tree": tree},
     )
 
+    # 4. Create the commit
     full_message = (
-        with_signoff(args.message, derive_signoff_trailer(app_slug))
-        if app_slug
+        with_signoff(args.message, derive_signoff_trailer(args.app_slug))
+        if args.app_slug
         else args.message
     )
     new_commit = github_api(
@@ -374,6 +449,21 @@ def main() -> int:
         {"message": full_message, "tree": new_tree["sha"], "parents": [base_sha]},
     )
 
+    # GitHub's commit endpoint can accept the commit even when the resulting
+    # signature is absent or unverified. Read it back and fail before publishing
+    # any ref unless GitHub explicitly attests the commit.
+    verified_commit = github_api(
+        "GET", f"/repos/{owner_repo}/git/commits/{new_commit['sha']}", token
+    )
+    verification = verified_commit.get("verification")
+    if verified_commit.get("sha") != new_commit["sha"] or not isinstance(verification, dict) or not verification.get("verified"):
+        reason = verification.get("reason") if isinstance(verification, dict) else "missing"
+        sys.stderr.write(
+            f"GitHub did not verify commit {new_commit['sha']} (reason: {reason})\n"
+        )
+        return 1
+
+    # 5. Create or force-update the new-branch ref
     existing = github_api_optional(
         "GET", f"/repos/{owner_repo}/git/ref/heads/{args.new_branch}", token
     )
@@ -385,7 +475,6 @@ def main() -> int:
             {"ref": f"refs/heads/{args.new_branch}", "sha": new_commit["sha"]},
         )
     else:
-        # Same-day reruns reuse the date-stamped branch — force-update is documented.
         github_api(
             "PATCH",
             f"/repos/{owner_repo}/git/refs/heads/{args.new_branch}",

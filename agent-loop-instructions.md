@@ -38,7 +38,7 @@ CI runs Type-check, Test, and Build as required checks on PRs targeting `main`. 
 
 ## What NOT to edit
 
-This repo consumes synced files from `loomantix/claude-platform` via `.github/workflows/sync-from-upstream.yml`. The files listed below are overwritten on every sync — local edits will be reverted. The canonical list is the upstream's `scripts/sync-targets.yml`; this repo's `.platform-config.yml` declares an empty `skip_targets:`, so every non-`delete` destination in the manifest applies here.
+This repo consumes synced files from `loomantix/activeloom` via `.github/workflows/sync-from-upstream.yml`. The files listed below are overwritten on every sync — local edits will be reverted. The canonical list is the upstream's `scripts/sync-targets.yml`; this repo's `.activeloom-config.yml` declares an empty `skip_targets:`, so every non-`delete` destination in the manifest applies here.
 
 Synced surfaces (do **not** edit in this repo):
 
@@ -53,7 +53,7 @@ Synced surfaces (do **not** edit in this repo):
 - `.claude/agents/code-explorer.md`, `code-architect.md`, `code-reviewer.md`
 - `.claude/REVIEW_WORKFLOW.md`
 - `.claude/settings.json`
-- `.github/copilot-instructions.md` (generated from the upstream template using values in `.platform-config.yml` — change the substitution values, not the generated file)
+- `.github/copilot-instructions.md` (generated from the upstream template using values in `.activeloom-config.yml` — change the substitution values, not the generated file)
 
 This file (`agent-loop-instructions.md`) is bootstrapped via `create_if_missing: true` and is **not** overwritten by subsequent syncs — local customizations here are safe.
 

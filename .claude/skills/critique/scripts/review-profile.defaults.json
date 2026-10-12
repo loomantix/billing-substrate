@@ -1,0 +1,30 @@
+{
+  "schema_version": 3,
+  "defaults_version": "2026.10.03",
+  "engines": {
+    "claude": {
+      "model": "claude-opus-5-5",
+      "effort": "medium",
+      "worker": { "model": "claude-opus-5-5", "effort": "medium" }
+    },
+    "codex": {
+      "model": "gpt-6-astra",
+      "effort": "medium",
+      "worker": { "model": "gpt-6-astra", "effort": "medium" }
+    },
+    "gemini": {
+      "model": "gemini-3.8-flash-high",
+      "effort": "high",
+      "worker": { "model": "gemini-3.8-flash-high", "effort": "high" }
+    }
+  },
+  "order": {
+    "lean": ["claude", "codex"],
+    "deep": ["claude", "codex", "gemini"]
+  },
+  "notes": {
+    "claude": "Pins Claude Opus 5.5 at medium effort for reviewer and worker roles.",
+    "codex": "Pins GPT-6 Astra at medium effort; choose inherit to use the Codex CLI's configured model instead.",
+    "gemini": "The Antigravity CLI accepts low, medium or high effort."
+  }
+}

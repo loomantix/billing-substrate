@@ -17,6 +17,7 @@ pr=""
 base=""
 head=""
 round=""
+preflight_only=false
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -25,6 +26,7 @@ while [ "$#" -gt 0 ]; do
         --base) [ "$#" -ge 2 ] || usage; base="$2"; shift 2 ;;
         --head) [ "$#" -ge 2 ] || usage; head="$2"; shift 2 ;;
         --round) [ "$#" -ge 2 ] || usage; round="$2"; shift 2 ;;
+        --preflight-only) preflight_only=true; shift ;;
         *) usage ;;
     esac
 done
@@ -34,8 +36,11 @@ done
 [[ "$base" =~ ^[0-9a-f]{40}$ ]] || usage
 [[ "$head" =~ ^[0-9a-f]{40}$ ]] || usage
 [[ "$round" =~ ^[1-9][0-9]*$ ]] || usage
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+launch_state() { python3 -I "$script_dir/review-launch-state.py" "$@"; }
+launch_state preflight missing_tool
 
-review_timeout_seconds="${LOCAL_REVIEW_PASS_TIMEOUT_SECONDS:-1800}"
+review_timeout_seconds="${LOCAL_REVIEW_PASS_TIMEOUT_SECONDS:-3600}"
 [[ "$review_timeout_seconds" =~ ^[1-9][0-9]*$ ]] && \
     [ "$review_timeout_seconds" -le 3600 ] || {
     echo "LOCAL_REVIEW_PASS_TIMEOUT_SECONDS must be an integer from 1 through 3600" >&2
@@ -46,20 +51,20 @@ for tool in git gh python3 setsid timeout; do
     command -v "$tool" >/dev/null 2>&1 || { echo "$tool is required" >&2; exit 1; }
 done
 
-# Pinned loomantix/gemini-platform commit whose `.agents` tree is the only
+# Pinned loomantix/activeloom commit whose `.agents` tree is the only
 # relay surface this launcher exposes to the unattended reviewer. Bumping it
 # also requires updating AGY_SURFACE_SHA in tests/test_agy_review_launcher.py.
-agy_surface_sha="3d7ad7c6d1e088faca88d52490bda1f45ce7e1fd"
+agy_surface_sha="c4c7a1d3956b94f05b320f57b3218a596ea40c54"
 
 # The companion surface must speak this engine's ledger protocol. Reading the
 # expectation from the vendored version file beside this script keeps the two
 # in step through a ledger bump instead of pinning the number twice.
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ledger_version_file="$script_dir/review-ledger.version"
 [ -f "$ledger_version_file" ] || { echo "vendored review-ledger.version is missing" >&2; exit 1; }
 ledger_version="$(tr -d '[:space:]' <"$ledger_version_file")"
 [ -n "$ledger_version" ] || { echo "vendored review-ledger.version is empty" >&2; exit 1; }
 
+launch_state preflight pr_boundary
 current_repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
 actor="$(gh api user --jq .login)"
 pr_row="$(
@@ -80,8 +85,17 @@ remote_head="${remote_row%%[[:space:]]*}"
 [ "$remote_head" = "$head" ] || { echo "remote branch head does not match --head" >&2; exit 1; }
 [ -z "$(git status --porcelain)" ] || { echo "review worktree must be clean" >&2; exit 1; }
 
+launch_state preflight missing_tool
 agy_review_cli="${AGY_REVIEW_CLI:-agy}"
 command -v "$agy_review_cli" >/dev/null 2>&1 || { echo "the Antigravity CLI is required" >&2; exit 1; }
+
+# Model and effort come from the user's review profile, or from the settings a
+# review-chain run pinned when it started. The launch region below resolves
+# them again under its hash.
+launch_state preflight review_profile
+agy_settings="$(python3 -I "$script_dir/review-profile.py" launch-args --engine gemini --repo "$repo")"
+agy_model="${agy_settings%%$'\n'*}"
+agy_effort="${agy_settings#*$'\n'}"
 
 temp_dir="$(mktemp -d)"
 trap 'rm -rf -- "$temp_dir"' EXIT
@@ -120,7 +134,8 @@ run_agy_managed() {
     local limit="$2"
     shift 2
     set +e
-    setsid timeout --signal=TERM --kill-after=5s "$limit" "$agy_review_cli" "$@" >"$output_file" &
+    env -u ACTIVELOOM_AGY_USAGE_FILE -u ACTIVELOOM_ATTEMPT_ID \
+        setsid timeout --signal=TERM --kill-after=5s "$limit" "$agy_review_cli" "$@" >"$output_file" &
     agy_pid="$!"
     wait "$agy_pid"
     local child_exit="$?"
@@ -135,24 +150,36 @@ trap 'forward_signal HUP 129' HUP
 
 # The outer bound stays above --print-timeout so the CLI's own timeout fires
 # first and still writes a structured payload for the parser below.
+launch_state preflight skill_discovery
 skills_exit=0
+if [ -z "${ACTIVELOOM_REVIEW_SURFACE:-}" ]; then
 run_agy_managed "$skills_file" 2m \
-    --model gemini-3.7-flash-high \
-    --effort high \
+    --model "$agy_model" \
+    --effort "$agy_effort" \
     --output-format json \
     --print-timeout 90s \
     --print '/skills' || skills_exit="$?"
+fi
 
-agy_surface_root="$(python3 - "$skills_file" "$ledger_version" "$skills_exit" <<'PY'
+agy_surface_root="$(python3 - "$skills_file" "$ledger_version" "$skills_exit" "$agy_surface_sha" <<'PY'
 import json
+import os
 import pathlib
 import sys
 
 exit_code = int(sys.argv[3])
-try:
-    payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-except (OSError, UnicodeError, json.JSONDecodeError) as error:
-    raise SystemExit(f"skill preflight returned invalid JSON (exit {exit_code}): {error}")
+if os.environ.get("ACTIVELOOM_REVIEW_SURFACE"):
+    nominated = pathlib.Path(os.environ["ACTIVELOOM_REVIEW_SURFACE"])
+    if not nominated.is_absolute() or nominated.is_symlink():
+        raise SystemExit("managed review surface must be an absolute regular directory")
+    payload = {"status": "SUCCESS", "command": {"data": {"skills": [
+        {"name": "deepcritique", "path": str(nominated / "skills/deepcritique/SKILL.md")}
+    ]}}}
+else:
+    try:
+        payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise SystemExit(f"skill preflight returned invalid JSON (exit {exit_code}): {error}")
 
 if not isinstance(payload, dict):
     raise SystemExit(f"skill preflight returned non-dict JSON (exit {exit_code})")
@@ -162,15 +189,48 @@ if exit_code != 0 or payload.get("status") != "SUCCESS":
     raise SystemExit(f"skill preflight did not succeed (exit {exit_code}): {status}")
 
 expected_ledger_version = sys.argv[2]
+pinned_surface_sha = sys.argv[4]
+
+def surface_restore_hint(reported: str) -> str:
+    # A swept trusted-surface checkout is the usual cause of an unresolvable
+    # skill: the installed skill links still point into a directory that no
+    # longer exists, so every relay path breaks at once. Name the dangling
+    # link and the pin that rebuilds its target rather than surfacing a bare
+    # ENOENT the reader has to work backwards from.
+    lines = []
+    if reported:
+        lines.append(f"The reviewer reported the deepcritique skill at {reported}.")
+        candidate = pathlib.Path(reported)
+        for part in [candidate, *candidate.parents]:
+            if part.is_symlink():
+                lines.append(f"{part} links to {os.readlink(part)}, which does not resolve.")
+                break
+        else:
+            missing = next((p for p in reversed(candidate.parents) if not p.exists()), None)
+            if missing is not None:
+                lines.append(f"The first missing directory on that path is {missing}.")
+    lines.append(
+        f"The pinned relay surface is activeloom commit {pinned_surface_sha}. If its "
+        "checkout was removed, recreate it from an activeloom clone with "
+        f"`git worktree add <checkout-dir> {pinned_surface_sha}`, then re-run the skill "
+        "installer so the links resolve again."
+    )
+    return "\n".join(lines)
+
+
 skills = payload.get("command", {}).get("data", {}).get("skills", [])
 matches = [row for row in skills if row.get("name") == "deepcritique"]
 if len(matches) != 1:
-    raise SystemExit("the reviewer must resolve exactly one deepcritique skill")
+    detail = "" if matches else f"\n{surface_restore_hint('')}"
+    raise SystemExit(f"the reviewer must resolve exactly one deepcritique skill{detail}")
 
 try:
     path = pathlib.Path(str(matches[0].get("path", ""))).resolve(strict=True)
 except OSError as error:
-    raise SystemExit(f"the deepcritique skill path cannot be resolved: {error}")
+    raise SystemExit(
+        f"the deepcritique skill path cannot be resolved: {error}\n"
+        + surface_restore_hint(str(matches[0].get("path", "")))
+    )
 if path.name != "SKILL.md" or path.parent.name != "deepcritique" or any(".bak." in part for part in path.parts):
     raise SystemExit(f"the reviewer resolved a stale or unexpected deepcritique skill: {path}")
 
@@ -240,6 +300,7 @@ surface_git() {
         -C "$dir" "$@"
 }
 
+launch_state preflight surface_provenance
 agy_surface_repo="$(surface_git "$agy_surface_root" rev-parse --show-toplevel)"
 [ "$agy_surface_root" = "$agy_surface_repo/.agents" ] || {
     echo "the relay surface must be the .agents directory of its trusted checkout" >&2
@@ -247,17 +308,21 @@ agy_surface_repo="$(surface_git "$agy_surface_root" rev-parse --show-toplevel)"
 }
 agy_surface_remote="$(surface_git "$agy_surface_repo" remote get-url origin)"
 case "$agy_surface_remote" in
-    https://github.com/loomantix/gemini-platform.git|git@github.com:loomantix/gemini-platform.git) ;;
+    https://github.com/loomantix/activeloom.git|git@github.com:loomantix/activeloom.git) ;;
     *) echo "the relay surface has an untrusted Git remote" >&2; exit 1 ;;
 esac
 [ "$(surface_git "$agy_surface_repo" rev-parse HEAD)" = "$agy_surface_sha" ] || {
-    echo "the relay surface is not at the pinned gemini-platform commit $agy_surface_sha" >&2
+    echo "the relay surface is not at the pinned activeloom commit $agy_surface_sha" >&2
     exit 1
 }
-[ -z "$(surface_git "$agy_surface_repo" status --porcelain)" ] || {
-    echo "the relay surface checkout must be clean" >&2
+launch_state preflight dirty_surface
+surface_changes="$(surface_git "$agy_surface_repo" status --porcelain)"
+[ -z "$surface_changes" ] || {
+    printf 'the relay surface checkout must be clean: %s\n%s\n' "$agy_surface_repo" "$surface_changes" >&2
     exit 1
 }
+launch_state ready
+if "$preflight_only"; then exit 0; fi
 
 prompt="/deepcritique ${pr}
 
@@ -274,7 +339,13 @@ resolved threads and prior attestations. Post verified findings inline before
 edits, then validate, push, reply, resolve, and publish the normal review result.
 Write every scratch artifact under your own agent artifact directory rather than
 a path outside it. Do not invoke Claude Code or Codex; return control to the
-calling Claude session when the Gemini pass is complete."
+calling session when the Gemini pass is complete.
+Do not spawn subagents or background review lanes in this Agy print-mode pass. Run each review lane sequentially in series within the primary session. In each lane pass, post verified findings inline, apply fixes, and validate before proceeding to the next lane so subsequent lanes review the updated code and prior findings. Run all commands and tests synchronously in the foreground; never leave background tasks running. Write the canonical result and end the turn only after all lanes and validation are complete."
+
+if [ -n "${ACTIVELOOM_REVIEW_SURFACE:-}" ]; then
+    prompt="Read ${agy_surface_root}/skills/deepcritique/SKILL.md and follow it for this pass.
+${prompt#*$'\n'}"
+fi
 
 export AGENT_LOOP_REVIEW_BASE_SHA="$base"
 export AGENT_LOOP_REVIEW_ROUND="$round"
@@ -295,9 +366,13 @@ agy_exit=0
     exit 2
 }
 agy_outer_timeout_seconds=$((review_timeout_seconds + 30))
+agy_settings="$(python3 -I "$script_dir/review-profile.py" launch-args --engine gemini --repo "$repo")"
+agy_model="${agy_settings%%$'\n'*}"
+agy_effort="${agy_settings#*$'\n'}"
+launch_state execution
 run_agy_managed "$result_file" "${agy_outer_timeout_seconds}s" \
-    --model gemini-3.7-flash-high \
-    --effort high \
+    --model "$agy_model" \
+    --effort "$agy_effort" \
     --mode accept-edits \
     --dangerously-skip-permissions \
     --add-dir "$agy_surface_root" \
@@ -336,3 +411,6 @@ if not isinstance(response, str) or not response.strip():
     raise SystemExit("the review succeeded without a text response")
 print(response)
 PY
+
+# The final envelope exists only after the worker can no longer emit telemetry.
+launch_state usage "$result_file"

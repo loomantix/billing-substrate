@@ -53,6 +53,10 @@ We'll work with you on contract fit and publishing logistics before you start im
 
 ## Workflow
 
+Use Node 26 from `.nvmrc` and pnpm 10.29.3 from `packageManager` for development
+and CI. The existing Node 22 engine floor and typings remain the compatibility
+baseline; this toolchain upgrade does not raise published consumer requirements.
+
 1. **Open an issue** describing the change. For non-trivial changes, get rough alignment before opening a PR.
 2. **Fork the repo and create a feature branch**. Branch names: `feat/<short-description>`, `fix/<short-description>`, `docs/<short-description>`.
 3. **Make your changes**, with `git commit -s` (DCO sign-off) on every commit.

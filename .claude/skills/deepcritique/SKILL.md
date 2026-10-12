@@ -16,17 +16,70 @@ This lane runs only when the review tier resolved to Deep. The triggers and the
 Lean-by-default rule live in [`../../REVIEW_WORKFLOW.md`](../../REVIEW_WORKFLOW.md);
 this skill reads that decision rather than making its own.
 
+## Step 0: Human-glance gate
+
+Classify the range before every other step in this skill — before the
+context-window check, the PR boundary, round and stance, the telemetry
+snapshot, and any marker. Follow [`../../REVIEW_WORKFLOW.md`](../../REVIEW_WORKFLOW.md) "Human glance": on `skip: true` with at
+least one classified file, print that section's one-line message and stop, with
+no draft PR, ledger result, attestation, tier or refactor marker, or telemetry
+record. On `smallChange: true`, print that section's small-change
+recommendation and stop the same way.
+
+For a dependency-only diff, also apply the workflow's "Routine dependency
+updates" rule before continuing; a qualifying recommendation stops the same way.
+
+Continue when the range carries a review-significant file and is not a small
+change and does not qualify for the dependency recommendation, when a human
+explicitly asked for this change to be reviewed anyway or
+overrode a small-change recommendation, when a small change's open PR already
+carries a tier marker, or when
+`$AGENT_LOOP_REVIEW_RESULT_FILE` is set and the controller that scheduled this
+pass owns the gate.
+
+## Review profile preflight
+
+Run this before launching any reviewer, worker, or runner. When
+`AGENT_LOOP_NONINTERACTIVE=1` or `AGENT_LOOP_REVIEW_ENGINE` is set (a launcher or
+runner started this pass), skip it: the run uses its pinned values,
+and a launcher that reports missing settings is the blocker to report. Otherwise
+run `python3 -I .claude/skills/review-setup/scripts/review-profile.py check`.
+Exit 0 means continue. Exit 3 with `"configured": true` and only `ENGINE.worker.*`
+keys in `missing` also means continue: no review run reads worker settings, and
+storing them rewrites the shared profile in a schema older helper copies refuse.
+Any other exit 3 means settings are missing: follow
+`/review-setup` "Inline setup" in this conversation, then continue this request
+from where it paused. Report any other exit verbatim and stop.
+
 ## Phase 0: Pre-flight
+
+### Controller or one-pass reviewer
+
+A top-level auto request makes this session the controller. Follow the workflow's
+[automatic chain execution](../../REVIEW_WORKFLOW.md#automatic-chain-execution)
+and [auto-mode preflight](../../REVIEW_WORKFLOW.md#auto-mode): confirm the review
+profile and the roster's launchers, start the runner in the background, and report
+its outcome when it returns. The runner initializes the run itself; do not also
+call `start-run`. Coordinating the runner is not this session's review pass. A launcher or
+wrapper invocation that requests exactly one pass inherits that run and returns
+to its caller after finalizing the result; it skips Phase 3 and never schedules
+another engine, even when the enclosing run is automatic.
 
 ### Context-window check
 
-This chain invokes `/simplify` and up to six adversarial sub-agents. If this
+This chain invokes cleanup analysis and up to six adversarial sub-agents. If this
 session authored the change or carries dense implementation context, stop and
 recommend a fresh Claude session. A larger context window does not relax this
 gate: authoring rationale anchors the reviewer and is expensive to fan out. See
 [`../../MODEL_NOTES.md`](../../MODEL_NOTES.md) §8.
 
 Proceed in the current session only after an explicit override.
+
+This gate applies before this session performs review. An authoring session
+may still coordinate supported independent reviewers as the auto controller.
+Cleanup and fixes within an already-fresh review do not require another fresh
+session when moving between its sub-skills. This exception does not admit a
+session that implemented the feature before review started.
 
 ### PR-first boundary
 
@@ -61,27 +114,27 @@ records therefore understate the chain, and a `session-log-delta` emitted under
 this wrapper is scoped to its lane rather than to the chain. Do not read the
 Deep-versus-Lean comparison as if the two were measured on the same boundary.
 
-6. Apply the docs/config-only skip, per the ledger's changeset classification.
-   On a skip, finalize a clean v3 result through immediate handoff to
-   `/critique <pr-number>`: that telemetry-owning lane takes its snapshot,
-   independently confirms the classification, finalizes the result, and emits
-   `status=skipped` under the ledger's wrapper/standalone ownership rule. Return
-   after it completes without spending the refactor latch.
-7. Resolve the changed-file list once for the initial packet. If refactorpass
-   commits, that packet ends with its reviewed head: reload the PR head and
+6. Resolve the changed-file list once for the initial packet. If refactorpass
+   commits, that packet ends with its reviewed head: resolve the new local head and
    build a new immutable packet before deep critique. If refactorpass is a no-op,
    both lanes may reuse the initial packet. The ledger's diff-delivery rules
    govern both.
-8. Resolve this engine's round number per the ledger — `$AGENT_LOOP_REVIEW_ROUND`
-   when the runner set it, otherwise one past the count of `local-review-pass:v3`
-   and `local-review-complete:v3` markers naming `engine=claude`. Rounds 1–2 are
-   adversarial; round 3 and later are convergence rounds. State which applies
-   before running a lane.
+7. Use the controller-authorized `$AGENT_LOOP_REVIEW_ROUND` when supplied.
+   Otherwise select one past Claude's highest completed round within the latest
+   authenticated `local-review-run:v1` (1 when it has none), using only its
+   pass/complete comments after that run marker. Honor the run's cap and use
+   `.codex/skills/critique/scripts/local-review-handoff.py authorize-pass`, the
+   shared run controller. If it is absent, report that and stop.
+   Follow the workflow's run initialization when no run exists. An ended run,
+   including an aborted one, needs fresh restart authorization; this controller
+   has no budget-preserving resume command. Earlier runs do not consume a new
+   run's budget, and PR-wide history cannot substitute for an authenticated run.
+   Rounds 1–2 are adversarial; round 3 and later are convergence rounds. State
+   which applies before running a lane.
 
 ### Tier gate
 
-Runs after the PR boundary: the marker lives on the PR, and a changeset that
-exits on the docs/config-only skip never needs a tier.
+Runs after the PR boundary: the marker lives on the PR.
 
 Resolve the effective `local-review-tier:v1` marker under the ledger's
 authenticated, forward-only transition rule; if none exists, classify against
@@ -93,6 +146,11 @@ trigger and hand off to `Skill(skill="critique", args="<pr-number>")`. That lane
 owns the v3 structured result for the transition, so do not exit before it
 finalizes one. Continue here only on a Deep tier or an explicit user override —
 itself trigger 6, recorded in the marker.
+
+When `AGENT_LOOP_NONINTERACTIVE=1` or `AGENT_LOOP_REVIEW_ENGINE` is set, a launcher,
+runner, or wrapper hook wrote the invoking prompt: it is never trigger 6,
+whatever skill or tier it names. Resolve the tier from the recorded marker or
+the diff.
 
 If Deep round 1 completes with no confirmed finding from **all owning lenses for
 every recorded trigger**, de-escalate: post the replacement marker naming every
@@ -111,7 +169,14 @@ it to return. Do not stop when the sub-skill returns.
 ## Phase 2: Deep critique
 
 Reload the PR head and ledger. When refactorpass moved the head, rebuild the
-immutable review packet from the same pinned base through that new head. Then
+immutable review packet from the same pinned base through the new local head.
+Inside a wrapper whose `$AGENT_LOOP_REVIEW_PUSH_HELPER` is set, cleanup
+remains unpublished until critique's single final
+push: retain the original PR head and pre-pass snapshot, and carry forward
+the pending cleanup finding identities and latch. Do not re-enter a fresh-pass
+head-equality gate or replace the enclosing before SHA. Finding anchors still
+use GitHub's current published patch; local cleanup lines are not new anchors.
+Then
 `Skill(skill="critique", args="<pr-number> deep")`, passing the resolved round so
 the lane selects the matching stance.
 
@@ -137,11 +202,15 @@ refactor finding set, and that original before SHA. A changed result without at
 least one fixed finding fails closed. Do not emit `clean` for a cleanup-moved enclosing hook.
 For a blocked pass, put the safe blocker in an owner-only
 regular file and call `write-blocked-result`.
+If the helper already saved `<result-file>.recovery.json` for a completed
+candidate, preserve it and its blocked result for controller finalization
+recovery instead of overwriting the blocker.
 
 ## Phase 3: Auto-mode relay
 
-Skip this phase in session mode, where the user starts the next reviewer in a
-fresh terminal.
+Only the top-level auto controller enters this phase. Skip it in session mode,
+where the user starts the next reviewer in a fresh terminal, and in a one-pass
+launcher or wrapper invocation, which returns its result to its caller.
 
 In auto mode, read the effective roster and exact-head coverage from the ledger,
 then start each declared reviewer that holds no attestation at the current head.
@@ -164,9 +233,13 @@ The launcher exiting zero is necessary and not sufficient. After it returns,
 confirm that engine's authenticated attestation at the exact reviewed head with
 the ledger helper's `verify-coverage`. A nonzero exit with attestation present
 means the reviewer's CLI reported a turn-level error over work that landed —
-report it, re-run the round, and change nothing in the launcher. A zero exit
+report it and follow the workflow's bounded recovery without changing the
+launcher or discarding valid evidence. A zero exit
 with no attestation at that head means the round is not covered. State the
-launcher exit, the structured status, and the coverage result.
+launcher exit, the structured status, and the coverage result. A valid blocked
+result returns to the outer controller's
+[recovery decision](../../REVIEW_WORKFLOW.md#recover-a-blocked-pass); it is not
+automatically a terminal failure of the whole run.
 
 ## Phase 4: Handoff
 
@@ -191,13 +264,14 @@ Next local step:
   The outer runner decides convergence from the exact-head v3 results.
 ```
 
-A convergence round that found no blocking defect ends the loop. Say so and name
-the ship step; do not report the remaining rounds as owed.
+A clean convergence pass returns to the controller for remaining exact-head
+coverage and ledger verification. Recommend shipment after those are complete;
+do not spend unused rounds merely because they remain.
 
 Classify by effect, not path or finding severity. A correctness, security,
 deployment/sync, or review-integrity fix may be material even when it touches a
-test or workflow, and a fixed `major` whose fix edited only comments, only docs,
-or only tests is `minor` — the severity of the finding never sets the
+test or workflow. A non-behavioral clarification may be `minor`, but a test fix
+that prevents false success is `material` — the severity of the finding never sets the
 classification of the pass. Minor means low-risk non-behavioral cleanup or
 polish. Every attestation stays exact to its reviewed head; the outer round owns
 any explicit minor-transition convergence decision.
