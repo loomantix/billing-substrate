@@ -158,6 +158,7 @@ allowed_destinations:
 - .claude/hooks/**
 - .claude/prompt-stack.json
 - .claude/references/local-review-ledger.md
+- .claude/references/herdr.md
 - .claude/references/house-tokens.css
 - .claude/REVIEW_WORKFLOW.md
 - .claude/MODEL_NOTES.md
