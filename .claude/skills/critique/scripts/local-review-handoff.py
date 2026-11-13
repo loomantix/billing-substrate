@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -18,6 +19,19 @@ from urllib.parse import quote
 
 
 CURRENT_ACTOR: str | None = None
+# Set when the PR this command names is in silent mode: every gh call then goes
+# through the ledger helper's silent runner, which keeps the ledger local.
+SILENT_SCOPE: tuple[str, int] | None = None
+SILENT_ROOT_ENV = "ACTIVELOOM_SILENT_ROOT"
+SILENT_FORCE_ENV = "ACTIVELOOM_REVIEW_SILENT"
+RESTART_V1_RE = re.compile(
+    r"<!-- local-review-restart:v1 source=(?P<source>autonomy-policy|user-approval) "
+    r"id=(?P<id>[0-9a-f]{16}) policy-sha256=(?P<policy_sha256>[0-9a-f]{64}|none) "
+    r"repo=(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+) pr=(?P<pr>[1-9][0-9]*) "
+    r"head=(?P<head>[0-9a-f]{40}) ended-run=(?P<ended_run_id>[0-9a-f]{64}|none) "
+    r"ended-outcome=(?P<ended_outcome>converged|exhausted|aborted|transitioned|none) "
+    r"budget-used=(?P<budget_used>[0-9]+|none) -->"
+)
 # Engine identities this handoff surface accepts. Must stay in step with the
 # marker grammar below and with the engines the review-ledger helper accepts.
 ENGINES = ("codex", "claude", "gemini")
@@ -109,8 +123,83 @@ def _fail(message: str) -> NoReturn:
     raise HandoffError(message)
 
 
+def _ledger_helper() -> str:
+    return str(Path(__file__).with_name("review-ledger.js"))
+
+
+def _silent_pattern_matches(pattern: str, repo: str) -> bool:
+    """Mirror of the ledger helper's matcher; tests/fixtures/silent-globs.json pins both."""
+    value, target = pattern.lower(), repo.lower()
+    if value == "*":
+        return True
+    if value.endswith("/*"):
+        return target.startswith(value[:-1])
+    return value == target
+
+
+def _profile_says_silent(repo: str) -> bool:
+    if os.environ.get(SILENT_FORCE_ENV) == "1":
+        return True
+    explicit = os.environ.get("ACTIVELOOM_REVIEW_PROFILE")
+    if explicit:
+        path = Path(explicit)
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+        path = Path(base) / "activeloom" / "review-profile.json"
+    if not path.exists():
+        return False
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        _fail(f"review profile is unreadable: {path}; cannot decide silent mode")
+    if not isinstance(document, dict) or "silent" not in document:
+        return False
+    silent = document["silent"]
+    patterns = silent.get("repos") if isinstance(silent, dict) else None
+    if not isinstance(patterns, list) or any(not isinstance(p, str) for p in patterns):
+        _fail(f"review profile silent.repos is malformed: {path}")
+    return any(_silent_pattern_matches(p, repo) for p in patterns)
+
+
+def _silent_pinned(repo: str, pr: int) -> bool:
+    root = os.environ.get(SILENT_ROOT_ENV)
+    if not root:
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, check=False,
+        )
+        if result.returncode != 0:
+            return False
+        root = str(Path(result.stdout.strip()).resolve() / "activeloom-review")
+    store = Path(root) / f"{repo.replace('/', '-')}-{pr}".lower() / "silent"
+    return (store / "mode.json").exists()
+
+
+def _enter_silent_scope(args: argparse.Namespace) -> None:
+    """Route this command's gh calls through the silent runner when its PR is silent."""
+    global SILENT_SCOPE
+    repo, pr = getattr(args, "repo", None), getattr(args, "pr", None)
+    if not isinstance(repo, str) or not isinstance(pr, int):
+        return
+    explicit = getattr(args, "silent", False)
+    if explicit:
+        result = subprocess.run(
+            ["node", _ledger_helper(), "silent-pin", "--repo", repo, "--pr", str(pr)],
+            capture_output=True, text=True, check=False,
+        )
+        if result.returncode != 0:
+            _fail(f"could not pin silent mode: {result.stderr.strip() or 'no diagnostic'}")
+    if explicit or _silent_pinned(repo, pr) or _profile_says_silent(repo):
+        SILENT_SCOPE = (repo, pr)
+
+
 def _run_gh(args: list[str], payload: dict[str, Any] | None = None) -> str:
     command = ["gh", *args]
+    if SILENT_SCOPE is not None:
+        repo, pr = SILENT_SCOPE
+        command = [
+            "node", _ledger_helper(), "local-gh", "--repo", repo, "--pr", str(pr), "--", *args,
+        ]
     if payload is not None:
         command.extend(["--input", "-"])
     result = subprocess.run(
@@ -766,6 +855,16 @@ def _transition_run(args: argparse.Namespace) -> None:
     print(json.dumps(result, sort_keys=True))
 
 
+def _restart_helper() -> Any:
+    path = Path(__file__).resolve().parents[2] / "hreview/scripts/herd-config.py"
+    spec = importlib.util.spec_from_file_location("restart_approval", path)
+    if spec is None or spec.loader is None:
+        _fail("restart approval helper is unavailable")
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    return helper
+
+
 def _start_run(args: argparse.Namespace) -> None:
     approval_id = getattr(args, "restart_approval_id", None)
     if approval_id is None:
@@ -773,12 +872,7 @@ def _start_run(args: argparse.Namespace) -> None:
         return
     if not args.restart or getattr(args, "restart_from_run", None):
         _fail("--restart-approval-id requires --restart without --restart-from-run")
-    path = Path(__file__).resolve().parents[2] / "hreview/scripts/herd-config.py"
-    spec = importlib.util.spec_from_file_location("restart_approval", path)
-    if spec is None or spec.loader is None:
-        _fail("restart approval helper is unavailable")
-    helper = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(helper)
+    helper = _restart_helper()
     fields = {key: value for key, value in vars(args).items() if key != "handler"}
     fields["authorization_file"] = _read_context(args.authorization_file)
     fingerprint = hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
@@ -790,6 +884,7 @@ def _start_run(args: argparse.Namespace) -> None:
             _fail("scope decision differs from the restart approval")
         args.restart_reserve = reserve
         args.restart_intent = record.get("intent")
+        args.restart_record = record
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             _start_run_checked(args)
@@ -800,6 +895,32 @@ def _start_run(args: argparse.Namespace) -> None:
     except helper.ApprovalError as exc:
         _fail(str(exc))
     print(output, end="")
+
+
+def _restart_marker(record: dict[str, Any], repo: str, pr: int, head: str,
+                    previous: dict[str, Any] | None, end: dict[str, Any] | None) -> str:
+    policy = record.get("source", "user-approval") == "autonomy-policy"
+    ended_run = record.get("ended_run_id") if policy else previous["run_id"] if previous else None
+    outcome = record.get("ended_outcome") if policy else end["outcome"] if end else "transitioned" if previous else None
+    marker = (
+        f"<!-- local-review-restart:v1 source={record.get('source', 'user-approval')} "
+        f"id={record['id']} policy-sha256={record.get('policy_sha256') or 'none'} "
+        f"repo={repo} pr={pr} head={head} ended-run={ended_run or 'none'} "
+        f"ended-outcome={outcome or 'none'} budget-used={record.get('budget_used') if policy else 'none'} -->"
+    )
+    if not RESTART_V1_RE.fullmatch(marker):
+        _fail("malformed restart provenance")
+    return marker
+
+
+def _with_restart_marker(content: str, marker: str) -> str:
+    prefix = re.match(
+        r"(?:<!-- local-review-owner-transition:v1 [^\n]* -->\n)?"
+        r"(?:<!-- local-review-(?:sequence|plan):v1 [^\n]* -->\n\n)?"
+        r"(?:<!-- local-review-scope:v1 [^\n]* -->\n\n)?", content,
+    )
+    at = prefix.end() if prefix else 0
+    return content[:at] + marker + "\n\n" + content[at:]
 
 
 def _start_run_checked(args: argparse.Namespace) -> None:
@@ -905,6 +1026,13 @@ def _start_run_checked(args: argparse.Namespace) -> None:
             replay_content = (
                 replay_content[:at] + scope_match.group(0) + replay_content[at:]
             )
+        restart_record = getattr(args, "restart_record", None)
+        if restart_record is not None:
+            parent = records[-2] if len(records) > 1 else None
+            parent_end = _run_end(rows, parent["run_id"]) if parent else None
+            replay_content = _with_restart_marker(replay_content, _restart_marker(
+                restart_record, args.repo, args.pr, args.head, parent, parent_end,
+            ))
         if previous["content"] == replay_content:
             intent = getattr(args, "restart_intent", None)
             if intent is not None and intent["run_id"] != previous["run_id"]:
@@ -953,6 +1081,16 @@ def _start_run_checked(args: argparse.Namespace) -> None:
                 "re-run start-run with --scope-decision keep or --scope-decision split"
             )
     supersedes = None if previous is None else cast(int, previous["comment_id"])
+    restart_record = getattr(args, "restart_record", None)
+    if restart_record is not None:
+        if restart_record.get("source") == "autonomy-policy" and (
+            previous is None or previous["run_id"] != restart_record["ended_run_id"]
+            or previous_end is None or previous_end["outcome"] != restart_record["ended_outcome"]
+        ):
+            _fail("policy restart parent or outcome changed")
+        content = _with_restart_marker(content, _restart_marker(
+            restart_record, args.repo, args.pr, args.head, previous, previous_end,
+        ))
     run_id = _run_digest(
         tier=args.tier,
         max_rounds=max_rounds,
@@ -1734,6 +1872,10 @@ def _parser() -> argparse.ArgumentParser:
     start.add_argument("--trigger", type=_trigger)
     start.add_argument("--authorization-file", required=True)
     start.add_argument("--restart", action="store_true")
+    start.add_argument(
+        "--silent", action="store_true",
+        help="keep this PR's review ledger local; nothing is posted to GitHub",
+    )
     start.add_argument("--restart-approval-id", help="transactionally consume this user-recorded approval")
     start.add_argument("--owner-transition-id", help="bind the separately authorized ownership transition")
     start.add_argument("--restart-from-run", help="idempotent restart of this aborted run only")
@@ -1825,6 +1967,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if getattr(args, "round", 1) < 1:
         _fail("round must be positive")
+    _enter_silent_scope(args)
     args.handler(args)
     return 0
 
